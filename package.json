@@ -1,0 +1,35 @@
+{
+  "name": "homebridge-ariston-heater",
+  "version": "0.1.0",
+  "displayName": "Homebridge Ariston Heater",
+  "description": "Homebridge plugin for Ariston Velis/Lydos water heaters (Ariston NET)",
+  "license": "MIT",
+  "author": "Matteo Crippa",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matteocrippa/homebridge-aristonnet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/matteocrippa/homebridge-aristonnet/issues"
+  },
+  "homepage": "https://github.com/matteocrippa/homebridge-aristonnet#readme",
+  "main": "index.js",
+  "bin": {
+    "ariston-test-client": "bin/test-client.js"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "homebridge": ">=1.6.0"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "ariston",
+    "velis",
+    "lydos",
+    "water-heater",
+    "ariston-lydos"
+  ],
+  "dependencies": {
+    "axios": "^1.11.0"
+  }
+}
