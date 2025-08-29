@@ -40,7 +40,8 @@ export class AristonClient {
       baseURL: this.baseURL,
       timeout: 15000,
       headers: { 'User-Agent': this.userAgent, 'Content-Type': 'application/json' },
-      validateStatus: (s) => s >= 200 && s < 500,
+      // Accept up to 599 so axios doesn’t throw on 5xx; we’ll handle status checks explicitly.
+      validateStatus: (s) => s >= 200 && s < 600,
     });
     this.storage = new VariantStorage(cacheDir, log);
   }
@@ -114,12 +115,17 @@ export class AristonClient {
     const candidates: PlantBest[] = [] as any;
     for (const v of variants) {
       const url = `velis/${v}/${encodeURIComponent(plantId)}`;
-      const res = await this.http.get(url, { headers });
-      if (this.debug) this.log.log(`[GET ${url}] status=${res.status}`);
-      if (res.status === 200 && res.data && Object.keys(res.data as any).length) {
-        const fields = this.extractFields(res.data);
-        const score = scoreCandidate(fields);
-        candidates.push({ kind: v, data: res.data, fields, score });
+      try {
+        const res = await this.http.get(url, { headers });
+        if (this.debug) this.log.log(`[GET ${url}] status=${res.status}`);
+        if (res.status === 200 && res.data && Object.keys(res.data as any).length) {
+          const fields = this.extractFields(res.data);
+          const score = scoreCandidate(fields);
+          candidates.push({ kind: v, data: res.data, fields, score });
+        }
+      } catch (e: any) {
+        if (this.debug) this.log.error(`[GET ${url}] error: ${e?.message || e}`);
+        // continue with next variant
       }
     }
     if (!candidates.length) throw new Error('No plant data');

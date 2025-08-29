@@ -3,3 +3,4 @@ package-lock.json
 .vscode/
 .env
 dist/
+ariston-cache.json
