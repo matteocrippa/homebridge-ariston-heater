@@ -46,7 +46,13 @@ export class AristonClient {
   }
 
   async login(): Promise<string> {
-    const body = { usr: this.username, pwd: this.password, imp: false, notTrack: true, appInfo: { os: 2, appVer: '5.6.7772.40151', appId: 'com.remotethermo.aristonnet' } };
+    const body = {
+      usr: this.username,
+      pwd: this.password,
+      imp: false,
+      notTrack: true,
+      appInfo: { os: 2, appVer: '5.6.7772.40151', appId: 'com.remotethermo.aristonnet' },
+    };
     const res = await this.http.post('accounts/login', body);
     if (this.debug) this.log.log(`[login] status=${res.status}`);
     if (res.status !== 200 || !(res.data && (res.data as any).token)) throw new Error(`Login failed (${res.status})`);

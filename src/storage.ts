@@ -19,7 +19,9 @@ export class VariantStorage {
     this.log = log;
     const dir = baseDir || process.cwd();
     this.file = path.join(dir, 'ariston-cache.json');
-    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {}
     this.cache = this.load();
   }
 

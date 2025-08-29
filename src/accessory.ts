@@ -1,4 +1,4 @@
-import type { API, Logging, PlatformConfig, Service, Characteristic, CharacteristicValue } from 'homebridge';
+import type { API, Logging, PlatformConfig, Service, CharacteristicValue } from 'homebridge';
 import { AristonClient } from './client';
 
 export class AristonHeaterAccessory {
@@ -103,9 +103,11 @@ export class AristonHeaterAccessory {
       this.cached.power = typeof powerState === 'boolean' ? powerState : this.cached.power;
       this.pushState();
     } catch (e: any) {
-  this.log('Refresh failed:', e?.message || e);
-  // Optional: backoff a bit to avoid hammering if errors persist
-  try { await new Promise((r) => setTimeout(r, 500)); } catch {}
+      this.log('Refresh failed:', e?.message || e);
+      // Optional: backoff a bit to avoid hammering if errors persist
+      try {
+        await new Promise((r) => setTimeout(r, 500));
+      } catch {}
     }
   }
 
