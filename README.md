@@ -30,9 +30,9 @@ Add an accessory like:
       "name": "Water Heater",
       "username": "<ariston email>",
       "password": "<ariston password>",
-  "pollInterval": 30,
-  "minTemp": 35,
-  "maxTemp": 70,
+      "pollInterval": 30,
+      "minTemp": 35,
+      "maxTemp": 70,
       "debug": false
     }
   ]
