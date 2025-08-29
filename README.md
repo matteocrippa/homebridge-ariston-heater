@@ -30,7 +30,9 @@ Add an accessory like:
       "name": "Water Heater",
       "username": "<ariston email>",
       "password": "<ariston password>",
-      "pollInterval": 30,
+  "pollInterval": 30,
+  "minTemp": 35,
+  "maxTemp": 70,
       "debug": false
     }
   ]
@@ -47,15 +49,16 @@ Add an accessory like:
 
 ## Project structure
 
-- `src/client.js`: network client (login, discovery, read/write, variant selection)
-- `src/accessory.js`: Homebridge accessory wiring using the client
-- `index.js`: Homebridge registration entry
-- `bin/test-client.js`: standalone CLI to probe the API using `.env`
+- `src/client.ts`: network client (login, discovery, read/write, variant selection)
+- `src/accessory.ts`: Homebridge accessory wiring using the client
+- `src/index.ts`: Homebridge registration entry
+- `src/bin/test-client.ts`: standalone CLI source; published binary is `dist/bin/test-client.js`
 
 ## Notes
 
 - Requires Ariston NET cloud account credentials (same used in the mobile app).
 - For Lydos devices, `sePlantData` is typically selected; MED can return zeros which are ignored automatically.
+ - If behavior seems off, delete the cache file (ariston-cache.json) from the Homebridge storage path to force a re-probe.
 
 ## License
 
