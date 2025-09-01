@@ -46,6 +46,18 @@
         "minimum": 2,
         "maximum": 95
       },
+      "eveCharacteristics": {
+        "title": "Expose Eve-only extra fields (AntiLegionella, HeatReq, Showers)",
+        "type": "boolean",
+        "default": true,
+        "description": "Adds Eve-compatible custom characteristics to the Thermostat service; visible in Eve app, not in Apple Home."
+      },
+      "extraServices": {
+        "title": "Add extra sensor tiles in Home (optional)",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds Motion (Heating Request), Contact (Anti Legionella), and Humidity (Available Showers) services as separate tiles in Home."
+      },
       
       "debug": {
         "title": "Enable Debug Logging",

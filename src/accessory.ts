@@ -3,7 +3,18 @@ import { AristonClient } from './client';
 
 export class AristonHeaterAccessory {
   private service: Service;
-  private cached = { currentTemp: null as number | null, targetTemp: null as number | null, power: null as boolean | null };
+  private eveCharacteristics: boolean;
+  private eveAntiLeg?: any;
+  private eveHeatReq?: any;
+  private eveShowers?: any;
+  private cached = {
+    currentTemp: null as number | null,
+    targetTemp: null as number | null,
+    power: null as boolean | null,
+    antiLeg: null as boolean | null,
+    heatReq: null as boolean | null,
+    avShw: null as number | null,
+  };
   private variant: string | null = null;
   private plantId: string | null;
   private timer?: NodeJS.Timeout;
@@ -24,6 +35,7 @@ export class AristonHeaterAccessory {
   this.debug = !!config.debug;
   this.minTemp = Math.max(1, Number(config.minTemp ?? 35));
   this.maxTemp = Math.max(this.minTemp + 1, Number(config.maxTemp ?? 70));
+  this.eveCharacteristics = config.eveCharacteristics !== false; // default true
 
     const cacheDir = (api && api.user && api.user.storagePath && api.user.storagePath()) || process.cwd();
     this.client = new AristonClient({
@@ -36,7 +48,7 @@ export class AristonHeaterAccessory {
       cacheDir,
     });
 
-    this.service = new ServiceCtor.Thermostat(this.name);
+  this.service = new ServiceCtor.Thermostat(this.name);
     this.service
       .getCharacteristic(CharacteristicCtor.TemperatureDisplayUnits)
       .onGet(async () => CharacteristicCtor.TemperatureDisplayUnits.CELSIUS);
@@ -56,6 +68,75 @@ export class AristonHeaterAccessory {
       .setProps({ validValues: [CharacteristicCtor.TargetHeatingCoolingState.OFF, CharacteristicCtor.TargetHeatingCoolingState.HEAT] })
       .onGet(this.onGetTargetHeatingCoolingState.bind(this))
       .onSet(this.onSetTargetHeatingCoolingState.bind(this));
+
+    // Eve-only custom characteristics (not visible in Apple Home)
+    if (this.eveCharacteristics) {
+  const H = this.api.hap;
+  const makeUUID = (suffix: string) => `0D5B${suffix}-A1F7-4C2E-8E0B-2B7E5B2A9A10`;
+
+      class EveAntiLegCharacteristic extends H.Characteristic {
+        static readonly UUID = makeUUID('0001');
+        constructor() {
+          super('Anti Legionella', EveAntiLegCharacteristic.UUID, {
+            format: H.Characteristic.Formats.BOOL,
+            perms: [H.Characteristic.Perms.READ, H.Characteristic.Perms.NOTIFY],
+          });
+        }
+      }
+
+      class EveHeatReqCharacteristic extends H.Characteristic {
+        static readonly UUID = makeUUID('0002');
+        constructor() {
+          super('Heating Request', EveHeatReqCharacteristic.UUID, {
+            format: H.Characteristic.Formats.BOOL,
+            perms: [H.Characteristic.Perms.READ, H.Characteristic.Perms.NOTIFY],
+          });
+        }
+      }
+
+      class EveShowersCharacteristic extends H.Characteristic {
+        static readonly UUID = makeUUID('0003');
+        constructor() {
+          super('Available Showers', EveShowersCharacteristic.UUID, {
+            format: H.Characteristic.Formats.UINT8,
+            perms: [H.Characteristic.Perms.READ, H.Characteristic.Perms.NOTIFY],
+            minValue: 0,
+            maxValue: 4,
+            minStep: 1,
+          });
+        }
+      }
+
+      try {
+        this.eveAntiLeg = this.service.getCharacteristic(EveAntiLegCharacteristic);
+      } catch {
+        try {
+          this.eveAntiLeg = this.service.addCharacteristic(EveAntiLegCharacteristic);
+        } catch {}
+      }
+      if (this.eveAntiLeg) this.eveAntiLeg.onGet(async () => !!this.cached.antiLeg);
+
+      try {
+        this.eveHeatReq = this.service.getCharacteristic(EveHeatReqCharacteristic);
+      } catch {
+        try {
+          this.eveHeatReq = this.service.addCharacteristic(EveHeatReqCharacteristic);
+        } catch {}
+      }
+      if (this.eveHeatReq) this.eveHeatReq.onGet(async () => !!this.cached.heatReq);
+
+      try {
+        this.eveShowers = this.service.getCharacteristic(EveShowersCharacteristic);
+      } catch {
+        try {
+          this.eveShowers = this.service.addCharacteristic(EveShowersCharacteristic);
+        } catch {}
+      }
+      if (this.eveShowers)
+        this.eveShowers.onGet(async () =>
+          typeof this.cached.avShw === 'number' ? Math.max(0, Math.min(4, Math.round(this.cached.avShw))) : 0,
+        );
+    }
 
     this.initialize();
   }
@@ -78,6 +159,9 @@ export class AristonHeaterAccessory {
       this.cached.currentTemp = (best.fields.currentTemp as number) ?? null;
       this.cached.targetTemp = (best.fields.targetTemp as number) ?? null;
       this.cached.power = (best.fields.powerState as boolean) ?? null;
+      this.cached.antiLeg = (best.fields.antiLeg as boolean) ?? null;
+      this.cached.heatReq = (best.fields.heatReq as boolean) ?? null;
+      this.cached.avShw = (best.fields.avShw as number) ?? null;
       this.pushState();
       this.schedule();
     } catch (e: any) {
@@ -86,10 +170,9 @@ export class AristonHeaterAccessory {
   }
 
   private schedule() {
-  if (this.timer) clearInterval(this.timer);
-  // Slightly delay first refresh to stagger multiple accessories
-  setTimeout(() => this.refresh().catch(() => {}), 2000);
-  this.timer = setInterval(() => this.refresh().catch(() => {}), this.pollInterval * 1000);
+    if (this.timer) clearInterval(this.timer);
+    setTimeout(() => this.refresh().catch(() => {}), 2000);
+    this.timer = setInterval(() => this.refresh().catch(() => {}), this.pollInterval * 1000);
   }
 
   private async refresh() {
@@ -97,14 +180,16 @@ export class AristonHeaterAccessory {
     try {
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
-      const { currentTemp, targetTemp, powerState } = best.fields as any;
+      const { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw } = best.fields as any;
       this.cached.currentTemp = typeof currentTemp === 'number' ? currentTemp : this.cached.currentTemp;
       this.cached.targetTemp = typeof targetTemp === 'number' ? targetTemp : this.cached.targetTemp;
       this.cached.power = typeof powerState === 'boolean' ? powerState : this.cached.power;
+      this.cached.antiLeg = typeof antiLeg === 'boolean' ? antiLeg : this.cached.antiLeg;
+      this.cached.heatReq = typeof heatReq === 'boolean' ? heatReq : this.cached.heatReq;
+      this.cached.avShw = typeof avShw === 'number' ? avShw : this.cached.avShw;
       this.pushState();
     } catch (e: any) {
       this.log('Refresh failed:', e?.message || e);
-      // Optional: backoff a bit to avoid hammering if errors persist
       try {
         await new Promise((r) => setTimeout(r, 500));
       } catch {}
@@ -119,6 +204,22 @@ export class AristonHeaterAccessory {
       this.service.updateCharacteristic(C.TargetHeatingCoolingState, this.cached.power ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF);
       this.service.updateCharacteristic(C.CurrentHeatingCoolingState, this.cached.power ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
     }
+
+    // Update Eve custom characteristics
+    try {
+      if (this.eveAntiLeg && typeof this.cached.antiLeg === 'boolean') this.eveAntiLeg.updateValue(!!this.cached.antiLeg);
+    } catch {}
+    try {
+      if (this.eveHeatReq && typeof this.cached.heatReq === 'boolean') this.eveHeatReq.updateValue(!!this.cached.heatReq);
+    } catch {}
+    try {
+      if (this.eveShowers && typeof this.cached.avShw === 'number') this.eveShowers.updateValue(Math.max(0, Math.min(4, Math.round(this.cached.avShw))));
+    } catch {}
+  }
+
+  private scaleShowersToPercent(showers: number | null): number {
+    const n = typeof showers === 'number' ? showers : 0;
+  return Math.max(0, Math.min(100, Math.round((Math.min(4, n) / 4) * 100)));
   }
 
   private async onGetCurrentTemperature(): Promise<number> {

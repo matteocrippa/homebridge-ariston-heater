@@ -14,7 +14,14 @@ export interface AristonClientOpts {
 export interface PlantBest {
   kind: string;
   data: any;
-  fields: { currentTemp?: number; targetTemp?: number; powerState?: boolean };
+  fields: {
+    currentTemp?: number;
+    targetTemp?: number;
+    powerState?: boolean;
+    antiLeg?: boolean;
+    heatReq?: boolean;
+    avShw?: number;
+  };
   score: number;
 }
 
@@ -81,7 +88,17 @@ export class AristonClient {
     const currentTemp = get(raw, ['temp', 'wtrTemp', 'currentTemp', 'currTemp', 'tCur']);
     const targetTemp = get(raw, ['procReqTemp', 'reqTemp', 'targetTemp', 'tSet']);
     const powerState = get(raw, ['on', 'power', 'pwr']);
-    return { currentTemp, targetTemp, powerState } as { currentTemp?: number; targetTemp?: number; powerState?: boolean };
+    const antiLeg = get(raw, ['antiLeg', 'antiLegionella', 'antiLegionellaActive']);
+    const heatReq = get(raw, ['heatReq', 'heatingReq', 'heatingRequest']);
+    const avShw = get(raw, ['avShw', 'availableShowers', 'avShow']);
+    return { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw } as {
+      currentTemp?: number;
+      targetTemp?: number;
+      powerState?: boolean;
+      antiLeg?: boolean;
+      heatReq?: boolean;
+      avShw?: number;
+    };
   }
 
   async getBestVelisPlantData(plantId: string): Promise<PlantBest> {
