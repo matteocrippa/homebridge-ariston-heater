@@ -78,8 +78,8 @@ export class AristonHeaterAccessory {
         static readonly UUID = makeUUID('0001');
         constructor() {
           super('Anti Legionella', EveAntiLegCharacteristic.UUID, {
-            format: H.Characteristic.Formats.BOOL,
-            perms: [H.Characteristic.Perms.READ, H.Characteristic.Perms.NOTIFY],
+            format: H.Formats.BOOL,
+            perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
           });
         }
       }
@@ -87,19 +87,19 @@ export class AristonHeaterAccessory {
       class EveHeatReqCharacteristic extends H.Characteristic {
         static readonly UUID = makeUUID('0002');
         constructor() {
-          super('Heating Request', EveHeatReqCharacteristic.UUID, {
-            format: H.Characteristic.Formats.BOOL,
-            perms: [H.Characteristic.Perms.READ, H.Characteristic.Perms.NOTIFY],
+          super('Heating Active', EveHeatReqCharacteristic.UUID, {
+            format: H.Formats.BOOL,
+            perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
           });
         }
       }
 
-      class EveShowersCharacteristic extends H.Characteristic {
+    class EveShowersCharacteristic extends H.Characteristic {
         static readonly UUID = makeUUID('0003');
         constructor() {
-          super('Available Showers', EveShowersCharacteristic.UUID, {
-            format: H.Characteristic.Formats.UINT8,
-            perms: [H.Characteristic.Perms.READ, H.Characteristic.Perms.NOTIFY],
+      super('Showers', EveShowersCharacteristic.UUID, {
+            format: H.Formats.UINT8,
+            perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
             minValue: 0,
             maxValue: 4,
             minStep: 1,
@@ -132,13 +132,17 @@ export class AristonHeaterAccessory {
           this.eveShowers = this.service.addCharacteristic(EveShowersCharacteristic);
         } catch {}
       }
-      if (this.eveShowers)
-        this.eveShowers.onGet(async () =>
-          typeof this.cached.avShw === 'number' ? Math.max(0, Math.min(4, Math.round(this.cached.avShw))) : 0,
-        );
+      if (this.eveShowers) this.eveShowers.onGet(async () => this.getShowersCount());
     }
 
     this.initialize();
+
+    // Cleanup on Homebridge shutdown
+    try {
+      this.api.on('shutdown', () => {
+        if (this.timer) clearInterval(this.timer);
+      });
+    } catch {}
   }
 
   getServices(): Service[] {
@@ -213,13 +217,13 @@ export class AristonHeaterAccessory {
       if (this.eveHeatReq && typeof this.cached.heatReq === 'boolean') this.eveHeatReq.updateValue(!!this.cached.heatReq);
     } catch {}
     try {
-      if (this.eveShowers && typeof this.cached.avShw === 'number') this.eveShowers.updateValue(Math.max(0, Math.min(4, Math.round(this.cached.avShw))));
+      if (this.eveShowers) this.eveShowers.updateValue(this.getShowersCount());
     } catch {}
   }
 
-  private scaleShowersToPercent(showers: number | null): number {
-    const n = typeof showers === 'number' ? showers : 0;
-  return Math.max(0, Math.min(100, Math.round((Math.min(4, n) / 4) * 100)));
+  private getShowersCount(): number {
+    const n = typeof this.cached.avShw === 'number' ? Math.round(this.cached.avShw) : 0;
+    return Math.max(0, Math.min(4, n));
   }
 
   private async onGetCurrentTemperature(): Promise<number> {
