@@ -1,6 +1,6 @@
 {
   "name": "homebridge-ariston-heater",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Homebridge Ariston Heater",
   "description": "Homebridge plugin for Ariston Velis/Lydos water heaters (Ariston NET)",
   "license": "MIT",

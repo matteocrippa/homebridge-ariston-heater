@@ -1,83 +1,80 @@
 {
-  "pluginAlias": "AristonHeater",
-  "pluginType": "accessory",
-  "headerDisplay": "Ariston NET Velis/Lydos water heater. Uses cloud API to read/set temperature and power.",
-  "footerDisplay": "Tip: If the device behaves oddly after changes, remove ariston-cache.json from the Homebridge storage path to force a re-detection of the variant.",
-  "schema": {
-    "type": "object",
-    "properties": {
-      "name": {
-        "title": "Name",
-        "type": "string",
-        "default": "Ariston Heater"
-      },
-      "username": {
-        "title": "Ariston Username (Email)",
-        "type": "string"
-      },
-      "password": {
-        "title": "Ariston Password",
-        "type": "string",
-        "format": "password"
-      },
-      "gateway": {
-        "title": "Plant ID (optional)",
-        "type": "string",
-        "description": "If empty, the plugin will auto-discover the first available Velis/Lydos plant."
-      },
-      "pollInterval": {
-        "title": "Poll Interval (seconds)",
-        "type": "number",
-  "default": 1800,
-  "minimum": 15,
-  "description": "How often to refresh state from the cloud. Default 1800 (30 minutes)."
-      },
-      "refreshOnGet": {
-        "title": "Refresh on characteristic read (on-demand)",
-        "type": "boolean",
-        "default": true,
-        "description": "When you open the accessory in Home/Eve, reading values will trigger a background refresh with a short cooldown."
-      },
-      "refreshOnGetCooldownSeconds": {
-        "title": "On-demand refresh cooldown (seconds)",
-        "type": "number",
-        "default": 10,
-        "minimum": 2,
-        "description": "Minimum gap between on-demand refreshes to avoid spamming the API."
-      },
-      "minTemp": {
-        "title": "Minimum Target Temperature (°C)",
-        "type": "number",
-        "default": 35,
-        "minimum": 1,
-        "maximum": 95
-      },
-      "maxTemp": {
-        "title": "Maximum Target Temperature (°C)",
-        "type": "number",
-        "default": 55,
-        "minimum": 2,
-        "maximum": 95
-      },
-      "eveCharacteristics": {
-        "title": "Expose Eve-only extra fields (AntiLegionella, HeatReq, Showers)",
-        "type": "boolean",
-        "default": true,
-        "description": "Adds Eve-compatible custom characteristics to the Thermostat service; visible in Eve app, not in Apple Home."
-      },
-      "extraServices": {
-        "title": "Add extra sensor tiles in Home (optional)",
-        "type": "boolean",
-        "default": false,
-        "description": "Adds Motion (Heating Request), Contact (Anti Legionella), and Humidity (Available Showers) services as separate tiles in Home."
-      },
-      
-      "debug": {
-        "title": "Enable Debug Logging",
-        "type": "boolean",
-        "default": false
-      }
-    },
-    "required": ["name", "username", "password"]
-  }
+    "pluginAlias": "AristonHeater",
+    "pluginType": "platform",
+    "headerDisplay": "Ariston NET Velis/Lydos water heater. Uses cloud API to read/set temperature and power.",
+    "footerDisplay": "Tip: If the device behaves oddly after changes, remove ariston-cache.json from the Homebridge storage path to force a re-detection of the variant.",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "title": "Name",
+                "type": "string",
+                "default": "Ariston Heater"
+            },
+            "username": {
+                "title": "Ariston Username (Email)",
+                "type": "string"
+            },
+            "password": {
+                "title": "Ariston Password",
+                "type": "string",
+                "format": "password"
+            },
+            "gateway": {
+                "title": "Plant ID (optional)",
+                "type": "string",
+                "description": "If empty, the plugin will auto-discover the first available Velis/Lydos plant."
+            },
+            "pollInterval": {
+                "title": "Poll Interval (seconds)",
+                "type": "number",
+                "default": 1800,
+                "minimum": 15,
+                "description": "How often to refresh state from the cloud. Default 1800 (30 minutes)."
+            },
+            "refreshOnGet": {
+                "title": "Refresh on characteristic read (on-demand)",
+                "type": "boolean",
+                "default": true,
+                "description": "When you open the accessory in Home/Eve, reading values will trigger a background refresh with a short cooldown."
+            },
+            "refreshOnGetCooldownSeconds": {
+                "title": "On-demand refresh cooldown (seconds)",
+                "type": "number",
+                "default": 10,
+                "minimum": 2,
+                "description": "Minimum gap between on-demand refreshes to avoid spamming the API."
+            },
+            "minTemp": {
+                "title": "Minimum Target Temperature (°C)",
+                "type": "number",
+                "default": 35,
+                "minimum": 1,
+                "maximum": 95
+            },
+            "maxTemp": {
+                "title": "Maximum Target Temperature (°C)",
+                "type": "number",
+                "default": 55,
+                "minimum": 2,
+                "maximum": 95
+            },
+            "eveCharacteristics": {
+                "title": "Expose Eve-only extra fields (AntiLegionella, HeatReq, Showers)",
+                "type": "boolean",
+                "default": true,
+                "description": "Adds Eve-compatible custom characteristics to the Thermostat service; visible in Eve app, not in Apple Home."
+            },
+            "debug": {
+                "title": "Enable Debug Logging",
+                "type": "boolean",
+                "default": false
+            }
+        },
+        "required": [
+            "name",
+            "username",
+            "password"
+        ]
+    }
 }
