@@ -28,9 +28,22 @@
       "pollInterval": {
         "title": "Poll Interval (seconds)",
         "type": "number",
-        "default": 30,
-        "minimum": 15,
-        "description": "How often to refresh state from the cloud. Minimum 15 seconds."
+  "default": 1800,
+  "minimum": 15,
+  "description": "How often to refresh state from the cloud. Default 1800 (30 minutes)."
+      },
+      "refreshOnGet": {
+        "title": "Refresh on characteristic read (on-demand)",
+        "type": "boolean",
+        "default": true,
+        "description": "When you open the accessory in Home/Eve, reading values will trigger a background refresh with a short cooldown."
+      },
+      "refreshOnGetCooldownSeconds": {
+        "title": "On-demand refresh cooldown (seconds)",
+        "type": "number",
+        "default": 10,
+        "minimum": 2,
+        "description": "Minimum gap between on-demand refreshes to avoid spamming the API."
       },
       "minTemp": {
         "title": "Minimum Target Temperature (°C)",

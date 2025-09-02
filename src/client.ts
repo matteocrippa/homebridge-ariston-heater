@@ -25,6 +25,15 @@ export interface PlantBest {
   score: number;
 }
 
+export class RateLimitError extends Error {
+  retryAfter?: number;
+  constructor(message: string, retryAfter?: number) {
+    super(message);
+    this.name = 'RateLimitError';
+    this.retryAfter = retryAfter;
+  }
+}
+
 export class AristonClient {
   private http: AxiosInstance;
   private token: string | null = null;
@@ -53,6 +62,30 @@ export class AristonClient {
     this.storage = new VariantStorage(cacheDir, log);
   }
 
+  private parseRetryAfter(v: any): number | undefined {
+    if (!v) return undefined;
+    // Retry-After can be seconds or HTTP-date
+    const s = String(v);
+    const asNum = Number(s);
+    if (Number.isFinite(asNum) && asNum > 0) return Math.min(600, Math.max(1, Math.floor(asNum))); // cap to 10 minutes
+    const d = Date.parse(s);
+    if (!Number.isNaN(d)) {
+      const secs = Math.ceil((d - Date.now()) / 1000);
+      return secs > 0 ? Math.min(600, secs) : 1;
+    }
+    return undefined;
+  }
+
+  private async doGet(path: string, headers: Record<string, any>) {
+    const res = await this.http.get(path, { headers });
+    if (this.debug) this.log.log(`[GET ${path}] status=${res.status}`);
+    if (res.status === 429) {
+      const ra = this.parseRetryAfter((res.headers as any)?.['retry-after']);
+      throw new RateLimitError('Rate limited', ra);
+    }
+    return res;
+  }
+
   async login(): Promise<string> {
     const body = {
       usr: this.username,
@@ -62,7 +95,7 @@ export class AristonClient {
       appInfo: { os: 2, appVer: '5.6.7772.40151', appId: 'com.remotethermo.aristonnet' },
     };
     const res = await this.http.post('accounts/login', body);
-    if (this.debug) this.log.log(`[login] status=${res.status}`);
+  if (this.debug) this.log.log(`[login] status=${res.status}`);
     if (res.status !== 200 || !(res.data && (res.data as any).token)) throw new Error(`Login failed (${res.status})`);
     const token = (res.data as any).token as string;
     this.token = token;
@@ -73,9 +106,12 @@ export class AristonClient {
     const headers = { 'ar.authToken': this.token as string };
     const paths = ['velis/medPlants', 'velis/plants'];
     for (const p of paths) {
-      const res = await this.http.get(p, { headers });
-      if (this.debug) this.log.log(`[GET ${p}] status=${res.status}`);
-      if (res.status === 200 && Array.isArray(res.data) && res.data.length) return res.data as any[];
+      try {
+        const res = await this.doGet(p, headers);
+        if (res.status === 200 && Array.isArray(res.data) && res.data.length) return res.data as any[];
+      } catch (e) {
+        if (e instanceof RateLimitError) throw e;
+      }
     }
     return [];
   }
@@ -107,13 +143,15 @@ export class AristonClient {
     if (cached) {
       try {
         const url = `velis/${cached}/${encodeURIComponent(plantId)}`;
-        const res = await this.http.get(url, { headers });
+        const res = await this.doGet(url, headers);
         if (this.debug) this.log.log(`[GET ${url}] status=${res.status} (cached)`);
         if (res.status === 200 && res.data && Object.keys(res.data as any).length) {
           const fields = this.extractFields(res.data);
           return { kind: cached, data: res.data, fields, score: 99 };
         }
-      } catch {}
+      } catch (e) {
+        if (e instanceof RateLimitError) throw e;
+      }
     }
 
     const variants = ['sePlantData', 'medPlantData', 'slpPlantData', 'onePlantData', 'evoPlantData'];
@@ -130,22 +168,30 @@ export class AristonClient {
     };
 
     const candidates: PlantBest[] = [] as any;
+    let saw429 = false;
+    let maxRetryAfter: number | undefined;
     for (const v of variants) {
       const url = `velis/${v}/${encodeURIComponent(plantId)}`;
       try {
-        const res = await this.http.get(url, { headers });
-        if (this.debug) this.log.log(`[GET ${url}] status=${res.status}`);
+        const res = await this.doGet(url, headers);
         if (res.status === 200 && res.data && Object.keys(res.data as any).length) {
           const fields = this.extractFields(res.data);
           const score = scoreCandidate(fields);
           candidates.push({ kind: v, data: res.data, fields, score });
         }
       } catch (e: any) {
+        if (e instanceof RateLimitError) {
+          saw429 = true;
+          if (typeof e.retryAfter === 'number') maxRetryAfter = Math.max(maxRetryAfter || 0, e.retryAfter);
+        }
         if (this.debug) this.log.error(`[GET ${url}] error: ${e?.message || e}`);
         // continue with next variant
       }
     }
-    if (!candidates.length) throw new Error('No plant data');
+    if (!candidates.length) {
+      if (saw429) throw new RateLimitError('Rate limited', maxRetryAfter);
+      throw new Error('No plant data');
+    }
     candidates.sort((a, b) => b.score - a.score || variants.indexOf(a.kind) - variants.indexOf(b.kind));
     const best = candidates[0];
     this.storage.setVariant(plantId, best.kind);

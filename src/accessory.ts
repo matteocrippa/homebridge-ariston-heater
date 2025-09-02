@@ -19,6 +19,10 @@ export class AristonHeaterAccessory {
   private plantId: string | null;
   private timer?: NodeJS.Timeout;
   private pollInterval: number;
+  private refreshOnGet: boolean;
+  private refreshOnGetCooldown: number;
+  private lastRefreshAt = 0;
+  private refreshing: Promise<void> | null = null;
   private debug: boolean;
   private client: AristonClient;
   private name: string;
@@ -31,11 +35,13 @@ export class AristonHeaterAccessory {
 
     this.name = config.name || 'Ariston Heater';
     this.plantId = (config.gateway as string) || null;
-    this.pollInterval = Math.max(15, Number(config.pollInterval) || 30);
+  this.pollInterval = Math.max(15, Number(config.pollInterval) || 1800);
   this.debug = !!config.debug;
   this.minTemp = Math.max(1, Number(config.minTemp ?? 35));
   this.maxTemp = Math.max(this.minTemp + 1, Number(config.maxTemp ?? 70));
   this.eveCharacteristics = config.eveCharacteristics !== false; // default true
+  this.refreshOnGet = config.refreshOnGet !== false; // default true
+  this.refreshOnGetCooldown = Math.max(2, Number(config.refreshOnGetCooldownSeconds) || 10);
 
     const cacheDir = (api && api.user && api.user.storagePath && api.user.storagePath()) || process.cwd();
     this.client = new AristonClient({
@@ -192,11 +198,35 @@ export class AristonHeaterAccessory {
       this.cached.heatReq = typeof heatReq === 'boolean' ? heatReq : this.cached.heatReq;
       this.cached.avShw = typeof avShw === 'number' ? avShw : this.cached.avShw;
       this.pushState();
+      this.lastRefreshAt = Date.now();
     } catch (e: any) {
-      this.log('Refresh failed:', e?.message || e);
+  const msg = e?.message || String(e);
+  const isRate = e?.name === 'RateLimitError';
+  const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : 500;
+  this.log(isRate ? 'Rate limited, backing off:' : 'Refresh failed:', msg, isRate ? `(retry in ${Math.round(delay / 1000)}s)` : '');
       try {
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, delay));
       } catch {}
+    }
+  }
+
+  private triggerRefresh() {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      try {
+        await this.refresh();
+      } finally {
+        this.refreshing = null;
+      }
+    })();
+    return this.refreshing;
+  }
+
+  private maybeRefreshOnDemand() {
+    if (!this.refreshOnGet) return;
+    const now = Date.now();
+    if (now - this.lastRefreshAt >= this.refreshOnGetCooldown * 1000) {
+      this.triggerRefresh();
     }
   }
 
@@ -227,10 +257,12 @@ export class AristonHeaterAccessory {
   }
 
   private async onGetCurrentTemperature(): Promise<number> {
+  this.maybeRefreshOnDemand();
     return this.cached.currentTemp ?? 0;
   }
 
   private async onGetTargetTemperature(): Promise<number> {
+  this.maybeRefreshOnDemand();
     return this.cached.targetTemp ?? 0;
   }
 
@@ -255,6 +287,7 @@ export class AristonHeaterAccessory {
 
   private async onGetTargetHeatingCoolingState(): Promise<number> {
     const C = this.api.hap.Characteristic;
+  this.maybeRefreshOnDemand();
     return this.cached.power ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF;
   }
 
