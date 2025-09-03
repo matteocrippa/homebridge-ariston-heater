@@ -1,6 +1,7 @@
 import type { API } from 'homebridge';
-import { AristonHeaterAccessory } from './accessory';
+import { PLATFORM_NAME } from './settings.js';
+import { AristonHeaterPlatform } from './platform.js';
 
-export = (api: API) => {
-  api.registerAccessory('homebridge-ariston-heater', 'AristonHeater', AristonHeaterAccessory);
+export default (api: API) => {
+  api.registerPlatform(PLATFORM_NAME, AristonHeaterPlatform);
 };

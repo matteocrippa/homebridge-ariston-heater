@@ -25,7 +25,7 @@ export default tseslint.config(
       'prefer-arrow-callback': 'warn',
       'max-len': ['warn', 160],
       'object-curly-spacing': ['warn', 'always'],
-  'prefer-const': 'warn',
+      'prefer-const': 'warn',
       'no-use-before-define': 'off',
       'no-empty': ['warn', { allowEmptyCatch: true }],
       '@typescript-eslint/no-use-before-define': ['warn', { classes: false, enums: false }],

@@ -1,12 +1,15 @@
-import type { API, Logging, PlatformConfig, Service, CharacteristicValue } from 'homebridge';
-import { AristonClient } from './client';
+import type { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import type { AristonHeaterPlatform } from './platform.js';
+import { AristonClient } from './client.js';
 
-export class AristonHeaterAccessory {
+export class AristonHeaterPlatformAccessory {
   private service: Service;
+
   private eveCharacteristics: boolean;
   private eveAntiLeg?: any;
   private eveHeatReq?: any;
   private eveShowers?: any;
+
   private cached = {
     currentTemp: null as number | null,
     targetTemp: null as number | null,
@@ -29,39 +32,56 @@ export class AristonHeaterAccessory {
   private minTemp: number;
   private maxTemp: number;
 
-  constructor(private log: Logging, config: PlatformConfig & any, private api: API) {
-    const ServiceCtor = api.hap.Service;
-    const CharacteristicCtor = api.hap.Characteristic;
+  constructor(
+    private readonly platform: AristonHeaterPlatform,
+    private readonly accessory: PlatformAccessory,
+    private readonly config: any,
+  ) {
+    const ServiceCtor = this.platform.Service;
+    const CharacteristicCtor = this.platform.Characteristic;
 
-    this.name = config.name || 'Ariston Heater';
-    this.plantId = (config.gateway as string) || null;
-  this.pollInterval = Math.max(15, Number(config.pollInterval) || 1800);
-  this.debug = !!config.debug;
-  this.minTemp = Math.max(1, Number(config.minTemp ?? 35));
-  this.maxTemp = Math.max(this.minTemp + 1, Number(config.maxTemp ?? 70));
-  this.eveCharacteristics = config.eveCharacteristics !== false; // default true
-  this.refreshOnGet = config.refreshOnGet !== false; // default true
-  this.refreshOnGetCooldown = Math.max(2, Number(config.refreshOnGetCooldownSeconds) || 10);
+    this.name = config?.name || accessory.displayName || 'Ariston Heater';
+    this.plantId = (config?.gateway as string) || null;
+    this.pollInterval = Math.max(15, Number(config?.pollInterval) || 1800);
+    this.debug = !!config?.debug;
+    this.minTemp = Math.max(1, Number(config?.minTemp ?? 35));
+    this.maxTemp = Math.max(this.minTemp + 1, Number(config?.maxTemp ?? 70));
+    this.eveCharacteristics = config?.eveCharacteristics !== false; // default true
+    this.refreshOnGet = config?.refreshOnGet !== false; // default true
+    this.refreshOnGetCooldown = Math.max(2, Number(config?.refreshOnGetCooldownSeconds) || 10);
 
-    const cacheDir = (api && api.user && api.user.storagePath && api.user.storagePath()) || process.cwd();
+    // Accessory Information
+    this.accessory.getService(ServiceCtor.AccessoryInformation)!
+      .setCharacteristic(CharacteristicCtor.Manufacturer, 'Ariston')
+      .setCharacteristic(CharacteristicCtor.Model, 'Velis/Lydos')
+      .setCharacteristic(CharacteristicCtor.SerialNumber, this.plantId || 'Unknown');
+
+    // API client
+    const cacheDir = (this.platform.api
+      && this.platform.api.user
+      && this.platform.api.user.storagePath
+      && this.platform.api.user.storagePath()) || process.cwd();
     this.client = new AristonClient({
-      baseURL: config.baseURL,
-      userAgent: config.userAgent,
-      username: config.username,
-      password: config.password,
-      log: (console as any) as Console,
+      baseURL: config?.baseURL,
+      userAgent: config?.userAgent,
+      username: config?.username,
+      password: config?.password,
+      log: console as any,
       debug: this.debug,
       cacheDir,
     });
 
-  this.service = new ServiceCtor.Thermostat(this.name);
+    // Thermostat service
+    this.service = this.accessory.getService(ServiceCtor.Thermostat) || this.accessory.addService(ServiceCtor.Thermostat);
+    this.service.setCharacteristic(CharacteristicCtor.Name, this.name);
+
     this.service
       .getCharacteristic(CharacteristicCtor.TemperatureDisplayUnits)
       .onGet(async () => CharacteristicCtor.TemperatureDisplayUnits.CELSIUS);
 
     this.service
       .getCharacteristic(CharacteristicCtor.TargetTemperature)
-  .setProps({ minValue: this.minTemp, maxValue: this.maxTemp, minStep: 1 })
+      .setProps({ minValue: this.minTemp, maxValue: this.maxTemp, minStep: 1 })
       .onGet(this.onGetTargetTemperature.bind(this))
       .onSet(this.onSetTargetTemperature.bind(this));
 
@@ -75,10 +95,10 @@ export class AristonHeaterAccessory {
       .onGet(this.onGetTargetHeatingCoolingState.bind(this))
       .onSet(this.onSetTargetHeatingCoolingState.bind(this));
 
-    // Eve-only custom characteristics (not visible in Apple Home)
+    // Eve-only custom characteristics
     if (this.eveCharacteristics) {
-  const H = this.api.hap;
-  const makeUUID = (suffix: string) => `0D5B${suffix}-A1F7-4C2E-8E0B-2B7E5B2A9A10`;
+      const H = this.platform.api.hap;
+      const makeUUID = (suffix: string) => `0D5B${suffix}-A1F7-4C2E-8E0B-2B7E5B2A9A10`;
 
       class EveAntiLegCharacteristic extends H.Characteristic {
         static readonly UUID = makeUUID('0001');
@@ -100,10 +120,10 @@ export class AristonHeaterAccessory {
         }
       }
 
-    class EveShowersCharacteristic extends H.Characteristic {
+      class EveShowersCharacteristic extends H.Characteristic {
         static readonly UUID = makeUUID('0003');
         constructor() {
-      super('Showers', EveShowersCharacteristic.UUID, {
+          super('Showers', EveShowersCharacteristic.UUID, {
             format: H.Formats.UINT8,
             perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
             minValue: 0,
@@ -145,14 +165,10 @@ export class AristonHeaterAccessory {
 
     // Cleanup on Homebridge shutdown
     try {
-      this.api.on('shutdown', () => {
+      this.platform.api.on('shutdown', () => {
         if (this.timer) clearInterval(this.timer);
       });
     } catch {}
-  }
-
-  getServices(): Service[] {
-    return [this.service];
   }
 
   private async initialize() {
@@ -175,7 +191,7 @@ export class AristonHeaterAccessory {
       this.pushState();
       this.schedule();
     } catch (e: any) {
-      this.log('Initialize error:', e?.message || e);
+      this.platform.log.error('Initialize error:', e?.message || e);
     }
   }
 
@@ -200,10 +216,14 @@ export class AristonHeaterAccessory {
       this.pushState();
       this.lastRefreshAt = Date.now();
     } catch (e: any) {
-  const msg = e?.message || String(e);
-  const isRate = e?.name === 'RateLimitError';
-  const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : 500;
-  this.log(isRate ? 'Rate limited, backing off:' : 'Refresh failed:', msg, isRate ? `(retry in ${Math.round(delay / 1000)}s)` : '');
+      const msg = e?.message || String(e);
+      const isRate = e?.name === 'RateLimitError';
+      const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : 500;
+      if (isRate) {
+        this.platform.log.warn('Rate limited, backing off:', msg, `(retry in ${Math.round(delay / 1000)}s)`);
+      } else {
+        this.platform.log.error('Refresh failed:', msg);
+      }
       try {
         await new Promise((r) => setTimeout(r, delay));
       } catch {}
@@ -231,7 +251,7 @@ export class AristonHeaterAccessory {
   }
 
   private pushState() {
-    const C = this.api.hap.Characteristic;
+    const C = this.platform.Characteristic;
     if (typeof this.cached.currentTemp === 'number') this.service.updateCharacteristic(C.CurrentTemperature, this.cached.currentTemp);
     if (typeof this.cached.targetTemp === 'number') this.service.updateCharacteristic(C.TargetTemperature, this.cached.targetTemp);
     if (typeof this.cached.power === 'boolean') {
@@ -239,7 +259,6 @@ export class AristonHeaterAccessory {
       this.service.updateCharacteristic(C.CurrentHeatingCoolingState, this.cached.power ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
     }
 
-    // Update Eve custom characteristics
     try {
       if (this.eveAntiLeg && typeof this.cached.antiLeg === 'boolean') this.eveAntiLeg.updateValue(!!this.cached.antiLeg);
     } catch {}
@@ -257,26 +276,26 @@ export class AristonHeaterAccessory {
   }
 
   private async onGetCurrentTemperature(): Promise<number> {
-  this.maybeRefreshOnDemand();
+    this.maybeRefreshOnDemand();
     return this.cached.currentTemp ?? 0;
   }
 
   private async onGetTargetTemperature(): Promise<number> {
-  this.maybeRefreshOnDemand();
+    this.maybeRefreshOnDemand();
     return this.cached.targetTemp ?? 0;
   }
 
   private async onSetTargetTemperature(value: CharacteristicValue): Promise<void> {
     if (!this.plantId || !this.variant) throw new Error('Device not ready');
     const vNum = typeof value === 'number' ? value : Number(value as any);
-  const v = Math.max(this.minTemp, Math.min(this.maxTemp, Math.round(vNum)));
+    const v = Math.max(this.minTemp, Math.min(this.maxTemp, Math.round(vNum)));
     const oldV = typeof this.cached.targetTemp === 'number' ? this.cached.targetTemp : v;
     try {
       await this.client.setTemperature(this.variant, this.plantId, oldV as number, v, false);
       this.cached.targetTemp = v;
       this.refresh().catch(() => {});
     } catch (e1: any) {
-      this.log('setTargetTemperature failed, re-probing variant:', e1?.message || e1);
+      this.platform.log.warn('setTargetTemperature failed, re-probing variant:', e1?.message || e1);
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
       await this.client.setTemperature(this.variant, this.plantId, oldV as number, v, false);
@@ -286,14 +305,14 @@ export class AristonHeaterAccessory {
   }
 
   private async onGetTargetHeatingCoolingState(): Promise<number> {
-    const C = this.api.hap.Characteristic;
-  this.maybeRefreshOnDemand();
+    const C = this.platform.Characteristic;
+    this.maybeRefreshOnDemand();
     return this.cached.power ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF;
   }
 
   private async onSetTargetHeatingCoolingState(value: CharacteristicValue): Promise<void> {
     if (!this.plantId || !this.variant) throw new Error('Device not ready');
-    const C = this.api.hap.Characteristic;
+    const C = this.platform.Characteristic;
     const num = typeof value === 'number' ? value : Number(value as any);
     const on = num === C.TargetHeatingCoolingState.HEAT;
     try {
@@ -301,7 +320,7 @@ export class AristonHeaterAccessory {
       this.cached.power = on;
       this.refresh().catch(() => {});
     } catch (e1: any) {
-      this.log('setTargetHeatingCoolingState failed, re-probing variant:', e1?.message || e1);
+      this.platform.log.warn('setTargetHeatingCoolingState failed, re-probing variant:', e1?.message || e1);
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
       await this.client.setPower(this.variant, this.plantId, on);
