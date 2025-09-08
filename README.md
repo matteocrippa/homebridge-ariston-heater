@@ -24,7 +24,9 @@ ariston-test-client
 
 ## Configuration (config.json)
 
-Add an accessory like:
+### Boilerplate
+
+Copy/paste this into your Homebridge `config.json` and adjust values as needed:
 
 ```
 {
@@ -34,13 +36,22 @@ Add an accessory like:
       "name": "Water Heater",
       "username": "<ariston email>",
       "password": "<ariston password>",
-      "pollInterval": 1800,
-      "minTemp": 35,
-      "maxTemp": 70,
-      "eveCharacteristics": true,
-      "refreshOnGet": true,
-      "refreshOnGetCooldownSeconds": 10,
-          "debug": false
+      
+      // Optional: specify a Plant/Gateway ID; leave out to auto-discover the first device
+      "gateway": "<plant id optional>",
+
+      // Polling and on-demand refresh
+      "pollInterval": 1800,                     // seconds; min 15; default 1800 (30 min)
+      "refreshOnGet": true,                     // trigger background refresh when viewing the accessory
+      "refreshOnGetCooldownSeconds": 10,        // min gap between on-demand refreshes
+
+      // Temperature range exposed to HomeKit
+      "minTemp": 35,                            // °C
+      "maxTemp": 70,                            // °C
+
+      // Extras / logging
+      "eveCharacteristics": true,               // expose AntiLegionella/HeatingActive/Showers in Eve app
+      "debug": false
     }
   ]
 }
