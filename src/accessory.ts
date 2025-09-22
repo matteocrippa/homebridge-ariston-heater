@@ -35,13 +35,14 @@ export class AristonHeaterAccessory {
 
     this.name = config.name || 'Ariston Heater';
     this.plantId = (config.gateway as string) || null;
-  this.pollInterval = Math.max(15, Number(config.pollInterval) || 1800);
-  this.debug = !!config.debug;
-  this.minTemp = Math.max(1, Number(config.minTemp ?? 35));
-  this.maxTemp = Math.max(this.minTemp + 1, Number(config.maxTemp ?? 70));
-  this.eveCharacteristics = config.eveCharacteristics !== false; // default true
-  this.refreshOnGet = config.refreshOnGet !== false; // default true
-  this.refreshOnGetCooldown = Math.max(2, Number(config.refreshOnGetCooldownSeconds) || 10);
+    // Enforce a 30-minute minimum poll interval; earlier updates only via on-demand refresh
+    this.pollInterval = Math.max(1800, Number(config.pollInterval) || 1800);
+    this.debug = !!config.debug;
+    this.minTemp = Math.max(1, Number(config.minTemp ?? 35));
+    this.maxTemp = Math.max(this.minTemp + 1, Number(config.maxTemp ?? 70));
+    this.eveCharacteristics = config.eveCharacteristics !== false; // default true
+    this.refreshOnGet = config.refreshOnGet !== false; // default true
+    this.refreshOnGetCooldown = Math.max(2, Number(config.refreshOnGetCooldownSeconds) || 10);
 
     const cacheDir = (api && api.user && api.user.storagePath && api.user.storagePath()) || process.cwd();
     this.client = new AristonClient({

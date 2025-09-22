@@ -29,8 +29,8 @@
                 "title": "Poll Interval (seconds)",
                 "type": "number",
                 "default": 1800,
-                "minimum": 15,
-                "description": "How often to refresh state from the cloud. Default 1800 (30 minutes)."
+                "minimum": 1800,
+                "description": "How often to refresh state from the cloud. Default and minimum 1800 (30 minutes). Use on-demand refresh for quicker checks."
             },
             "refreshOnGet": {
                 "title": "Refresh on characteristic read (on-demand)",

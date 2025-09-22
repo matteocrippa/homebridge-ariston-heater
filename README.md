@@ -41,7 +41,7 @@ Copy/paste this into your Homebridge `config.json` and adjust values as needed:
       "gateway": "<plant id optional>",
 
       // Polling and on-demand refresh
-      "pollInterval": 1800,                     // seconds; min 15; default 1800 (30 min)
+      "pollInterval": 1800,                     // seconds; min 1800; default 1800 (30 min)
       "refreshOnGet": true,                     // trigger background refresh when viewing the accessory
       "refreshOnGetCooldownSeconds": 10,        // min gap between on-demand refreshes
 
@@ -68,7 +68,7 @@ Copy/paste this into your Homebridge `config.json` and adjust values as needed:
   - Anti Legionella (boolean)
   - Heating Request (boolean)
   - Showers (0–4)
-- Gentle cloud polling (default every 30 minutes) with on-demand refresh when opening the accessory tile
+- Gentle cloud polling (default/min every 30 minutes) with on-demand refresh when opening the accessory tile
 
 ## Project structure
 
@@ -87,7 +87,7 @@ Copy/paste this into your Homebridge `config.json` and adjust values as needed:
 ### Options
 
 - `gateway` (string): Plant ID (gateway). Leave empty to auto-discover.
-- `pollInterval` (number): Refresh cadence in seconds. Default 1800 (30 minutes). Minimum 15.
+- `pollInterval` (number): Refresh cadence in seconds. Default/minimum 1800 (30 minutes). For quicker updates, rely on on-demand refresh when opening the accessory.
 - `minTemp`/`maxTemp` (number): Allowed range for target temperature.
 - `eveCharacteristics` (boolean): Expose Eve-only extra fields on the Thermostat service. Default true.
 - `refreshOnGet` (boolean): Trigger a background refresh when the accessory is viewed/read. Default true.
