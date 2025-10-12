@@ -133,8 +133,10 @@ export class AristonHeaterAccessory {
         this.eveAntiLeg = this.service.getCharacteristic(EveAntiLegCharacteristic);
       } catch {
         try {
+          this.eveAntiLeg = this.service.addOptionalCharacteristic(EveAntiLegCharacteristic);
+        } catch {
           this.eveAntiLeg = this.service.addCharacteristic(EveAntiLegCharacteristic);
-        } catch {}
+        }
       }
       if (this.eveAntiLeg) this.eveAntiLeg.onGet(async () => !!this.cached.antiLeg);
 
@@ -142,8 +144,10 @@ export class AristonHeaterAccessory {
         this.eveHeatReq = this.service.getCharacteristic(EveHeatReqCharacteristic);
       } catch {
         try {
+          this.eveHeatReq = this.service.addOptionalCharacteristic(EveHeatReqCharacteristic);
+        } catch {
           this.eveHeatReq = this.service.addCharacteristic(EveHeatReqCharacteristic);
-        } catch {}
+        }
       }
       if (this.eveHeatReq) this.eveHeatReq.onGet(async () => !!this.cached.heatReq);
 
@@ -151,8 +155,10 @@ export class AristonHeaterAccessory {
         this.eveShowers = this.service.getCharacteristic(EveShowersCharacteristic);
       } catch {
         try {
+          this.eveShowers = this.service.addOptionalCharacteristic(EveShowersCharacteristic);
+        } catch {
           this.eveShowers = this.service.addCharacteristic(EveShowersCharacteristic);
-        } catch {}
+        }
       }
       if (this.eveShowers) this.eveShowers.onGet(async () => this.getShowersCount());
     }
@@ -244,8 +250,15 @@ export class AristonHeaterAccessory {
 
   private pushState() {
     const C = this.api.hap.Characteristic;
-    if (typeof this.cached.currentTemp === 'number') this.service.updateCharacteristic(C.CurrentTemperature, this.cached.currentTemp);
-    if (typeof this.cached.targetTemp === 'number') this.service.updateCharacteristic(C.TargetTemperature, this.cached.targetTemp);
+    // Clamp temperatures to valid range before updating HomeKit
+    if (typeof this.cached.currentTemp === 'number') {
+      const clampedCurrent = Math.max(this.minTemp, Math.min(this.maxTemp, this.cached.currentTemp));
+      this.service.updateCharacteristic(C.CurrentTemperature, clampedCurrent);
+    }
+    if (typeof this.cached.targetTemp === 'number') {
+      const clampedTarget = Math.max(this.minTemp, Math.min(this.maxTemp, this.cached.targetTemp));
+      this.service.updateCharacteristic(C.TargetTemperature, clampedTarget);
+    }
     if (typeof this.cached.power === 'boolean') {
       this.service.updateCharacteristic(C.TargetHeatingCoolingState, this.cached.power ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF);
       this.service.updateCharacteristic(C.CurrentHeatingCoolingState, this.cached.power ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
