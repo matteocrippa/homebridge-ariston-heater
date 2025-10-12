@@ -71,6 +71,10 @@ export class AristonHeaterAccessory {
       .onGet(this.onGetCurrentTemperature.bind(this));
 
     this.service
+      .getCharacteristic(CharacteristicCtor.CurrentHeatingCoolingState)
+      .setProps({ validValues: [CharacteristicCtor.CurrentHeatingCoolingState.OFF, CharacteristicCtor.CurrentHeatingCoolingState.HEAT] });
+
+    this.service
       .getCharacteristic(CharacteristicCtor.TargetHeatingCoolingState)
       .setProps({ validValues: [CharacteristicCtor.TargetHeatingCoolingState.OFF, CharacteristicCtor.TargetHeatingCoolingState.HEAT] })
       .onGet(this.onGetTargetHeatingCoolingState.bind(this))
@@ -259,12 +263,12 @@ export class AristonHeaterAccessory {
 
   private async onGetCurrentTemperature(): Promise<number> {
   this.maybeRefreshOnDemand();
-    return this.cached.currentTemp ?? 0;
+    return this.cached.currentTemp ?? this.minTemp;
   }
 
   private async onGetTargetTemperature(): Promise<number> {
   this.maybeRefreshOnDemand();
-    return this.cached.targetTemp ?? 0;
+    return this.cached.targetTemp ?? this.minTemp;
   }
 
   private async onSetTargetTemperature(value: CharacteristicValue): Promise<void> {
