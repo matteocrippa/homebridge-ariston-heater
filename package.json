@@ -1,6 +1,6 @@
 {
   "name": "homebridge-ariston-heater",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "displayName": "Homebridge Ariston Heater",
   "description": "Homebridge plugin for Ariston Velis/Lydos water heaters (Ariston NET)",
   "license": "MIT",
@@ -35,27 +35,27 @@
     "ariston-lydos"
   ],
   "scripts": {
-  "build": "rimraf ./dist && tsc && npm run postbuild",
-  "clean": "rimraf dist",
-  "lint": "eslint src",
-  "prepublishOnly": "npm run lint && npm run build",
-  "prepare": "npm run build",
-  "watch": "npm run build && npm link && nodemon",
-  "postbuild": "chmod +x dist/bin/test-client.js"
+    "build": "rimraf ./dist && tsc && npm run postbuild",
+    "clean": "rimraf dist",
+    "lint": "eslint src",
+    "prepublishOnly": "npm run lint && npm run build",
+    "prepare": "npm run build",
+    "watch": "npm run build && npm link && nodemon",
+    "postbuild": "chmod +x dist/bin/test-client.js"
   },
   "dependencies": {
     "axios": "^1.11.0"
   },
   "devDependencies": {
-  "@eslint/js": "^9.21.0",
-  "@types/node": "^20.14.10",
-  "eslint": "^9.21.0",
-  "homebridge": "^2.0.0-beta.0",
-  "nodemon": "^3.1.9",
-  "rimraf": "^6.0.1",
-  "ts-node": "^10.9.2",
-  "typescript": "^5.5.4",
-  "typescript-eslint": "^8.24.1"
+    "@eslint/js": "^9.21.0",
+    "@types/node": "^20.14.10",
+    "eslint": "^9.21.0",
+    "homebridge": "^2.0.0-beta.0",
+    "nodemon": "^3.1.9",
+    "rimraf": "^6.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^8.24.1"
   },
   "peerDependencies": {
     "homebridge": "^1.8.0 || ^2.0.0-beta.0"
