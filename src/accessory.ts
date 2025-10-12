@@ -1,4 +1,4 @@
-import type { API, Logging, PlatformConfig, Service, CharacteristicValue } from 'homebridge';
+import type { API, Logger, PlatformConfig, PlatformAccessory, Service, CharacteristicValue } from 'homebridge';
 import { AristonClient } from './client';
 
 export class AristonHeaterAccessory {
@@ -29,7 +29,12 @@ export class AristonHeaterAccessory {
   private minTemp: number;
   private maxTemp: number;
 
-  constructor(private log: Logging, config: PlatformConfig & any, private api: API) {
+  constructor(
+    private log: Logger, 
+    config: PlatformConfig & any, 
+    private api: API,
+    private accessory?: PlatformAccessory,
+  ) {
     const ServiceCtor = api.hap.Service;
     const CharacteristicCtor = api.hap.Characteristic;
 
@@ -55,7 +60,13 @@ export class AristonHeaterAccessory {
       cacheDir,
     });
 
-  this.service = new ServiceCtor.Thermostat(this.name);
+    // Use existing service from cached accessory or create new one
+    if (this.accessory) {
+      this.service = this.accessory.getService(ServiceCtor.Thermostat) 
+        || this.accessory.addService(ServiceCtor.Thermostat, this.name);
+    } else {
+      this.service = new ServiceCtor.Thermostat(this.name);
+    }
     this.service
       .getCharacteristic(CharacteristicCtor.TemperatureDisplayUnits)
       .onGet(async () => CharacteristicCtor.TemperatureDisplayUnits.CELSIUS);
@@ -156,10 +167,6 @@ export class AristonHeaterAccessory {
     } catch {}
   }
 
-  getServices(): Service[] {
-    return [this.service];
-  }
-
   private async initialize() {
     try {
       await this.client.login();
@@ -180,7 +187,7 @@ export class AristonHeaterAccessory {
       this.pushState();
       this.schedule();
     } catch (e: any) {
-      this.log('Initialize error:', e?.message || e);
+      this.log.error('Initialize error:', e?.message || e);
     }
   }
 
@@ -208,7 +215,7 @@ export class AristonHeaterAccessory {
   const msg = e?.message || String(e);
   const isRate = e?.name === 'RateLimitError';
   const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : 500;
-  this.log(isRate ? 'Rate limited, backing off:' : 'Refresh failed:', msg, isRate ? `(retry in ${Math.round(delay / 1000)}s)` : '');
+  this.log.warn(isRate ? 'Rate limited, backing off:' : 'Refresh failed:', msg, isRate ? `(retry in ${Math.round(delay / 1000)}s)` : '');
       try {
         await new Promise((r) => setTimeout(r, delay));
       } catch {}
@@ -281,7 +288,7 @@ export class AristonHeaterAccessory {
       this.cached.targetTemp = v;
       this.refresh().catch(() => {});
     } catch (e1: any) {
-      this.log('setTargetTemperature failed, re-probing variant:', e1?.message || e1);
+      this.log.warn('setTargetTemperature failed, re-probing variant:', e1?.message || e1);
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
       await this.client.setTemperature(this.variant, this.plantId, oldV as number, v, false);
@@ -306,7 +313,7 @@ export class AristonHeaterAccessory {
       this.cached.power = on;
       this.refresh().catch(() => {});
     } catch (e1: any) {
-      this.log('setTargetHeatingCoolingState failed, re-probing variant:', e1?.message || e1);
+      this.log.warn('setTargetHeatingCoolingState failed, re-probing variant:', e1?.message || e1);
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
       await this.client.setPower(this.variant, this.plantId, on);

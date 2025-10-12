@@ -30,10 +30,10 @@ Copy/paste this into your Homebridge `config.json` and adjust values as needed:
 
 ```
 {
-  "accessories": [
+  "platforms": [
     {
-      "accessory": "AristonHeater",
-      "name": "Water Heater",
+      "platform": "AristonHeater",
+      "name": "Ariston Heater",
       "username": "<ariston email>",
       "password": "<ariston password>",
       
@@ -56,6 +56,38 @@ Copy/paste this into your Homebridge `config.json` and adjust values as needed:
   ]
 }
 ```
+
+### Migration from v0.1.x
+
+If you're upgrading from an earlier version, **move the configuration from `accessories` to `platforms` array**:
+
+**Old format (v0.1.x):**
+```json
+{
+  "accessories": [
+    {
+      "accessory": "AristonHeater",
+      "name": "Ariston Heater",
+      ...
+    }
+  ]
+}
+```
+
+**New format (v0.2.0+):**
+```json
+{
+  "platforms": [
+    {
+      "platform": "AristonHeater",
+      "name": "Ariston Heater",
+      ...
+    }
+  ]
+}
+```
+
+After updating the config, restart Homebridge. The accessory should appear automatically.
 
 ## Features
 
