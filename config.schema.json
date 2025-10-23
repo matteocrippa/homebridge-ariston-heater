@@ -55,7 +55,7 @@
             "maxTemp": {
                 "title": "Maximum Target Temperature (°C)",
                 "type": "number",
-                "default": 55,
+                "default": 70,
                 "minimum": 2,
                 "maximum": 95
             },

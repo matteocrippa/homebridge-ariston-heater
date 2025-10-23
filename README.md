@@ -6,6 +6,11 @@
 
 Homebridge plugin for Ariston NET Velis/Lydos water heaters. It discovers your plant, reads current/target temperature, toggles power, and auto-selects the correct Velis endpoint variant (se/med/slp/one/evo).
 
+## Prerequisites
+
+- **Node.js 18.0.0 or higher**
+- **Homebridge 1.8.0 or higher** (or 2.0.0-beta.0+)
+- Active Ariston NET cloud account with email and password
 
 ## Installation
 
@@ -13,13 +18,25 @@ Homebridge plugin for Ariston NET Velis/Lydos water heaters. It discovers your p
 2. Publish or use locally via `npm link`.
 3. Optional: test the network client without Homebridge using `.env` and the CLI:
 
-```
-# .env
-ARISTON_USER=you@example.com
-ARISTON_PASS=yourpassword
-# optional
+```bash
+# Copy .env.example to .env and fill in your credentials
+cp .env.example .env
+# Edit .env with your Ariston credentials
+nano .env
 
+# Then run the test client
 ariston-test-client
+```
+
+### Environment Variables (for test-client)
+
+Create a `.env` file in the project root (see `.env.example` for reference):
+
+```bash
+ARISTON_USER=your.email@example.com      # Required: your Ariston NET email
+ARISTON_PASS=your_password               # Required: your Ariston NET password
+ARISTON_PLANT=plant_id_optional          # Optional: specify a plant ID; omit to auto-discover
+ARISTON_DEBUG=1                          # Optional: enable debug logging
 ```
 
 ## Configuration (config.json)

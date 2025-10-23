@@ -7,6 +7,10 @@ export class AristonHeaterAccessory {
   private eveAntiLeg?: any;
   private eveHeatReq?: any;
   private eveShowers?: any;
+  private eveMode?: any;
+  private eveModeName?: any;
+  private eveModeRange?: any;
+  private deviceReady = false;
   private cached = {
     currentTemp: null as number | null,
     targetTemp: null as number | null,
@@ -14,6 +18,7 @@ export class AristonHeaterAccessory {
     antiLeg: null as boolean | null,
     heatReq: null as boolean | null,
     avShw: null as number | null,
+    mode: null as number | null,
   };
   private variant: string | null = null;
   private plantId: string | null;
@@ -129,6 +134,39 @@ export class AristonHeaterAccessory {
         }
       }
 
+      class EveModeCharacteristic extends H.Characteristic {
+        static readonly UUID = makeUUID('0004');
+        constructor() {
+          super('Mode', EveModeCharacteristic.UUID, {
+            format: H.Formats.UINT8,
+            perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
+            minValue: 0,
+            maxValue: 255,
+            minStep: 1,
+          });
+        }
+      }
+
+      class EveModeNameCharacteristic extends H.Characteristic {
+        static readonly UUID = makeUUID('0005');
+        constructor() {
+          super('Mode Name', EveModeNameCharacteristic.UUID, {
+            format: H.Formats.STRING,
+            perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
+          });
+        }
+      }
+
+      class EveModeRangeCharacteristic extends H.Characteristic {
+        static readonly UUID = makeUUID('0006');
+        constructor() {
+          super('Mode Range', EveModeRangeCharacteristic.UUID, {
+            format: H.Formats.STRING,
+            perms: [H.Perms.PAIRED_READ, H.Perms.NOTIFY],
+          });
+        }
+      }
+
       try {
         this.eveAntiLeg = this.service.getCharacteristic(EveAntiLegCharacteristic);
       } catch {
@@ -138,7 +176,9 @@ export class AristonHeaterAccessory {
           this.eveAntiLeg = this.service.addCharacteristic(EveAntiLegCharacteristic);
         }
       }
-      if (this.eveAntiLeg) this.eveAntiLeg.onGet(async () => !!this.cached.antiLeg);
+      if (this.eveAntiLeg) {
+        this.eveAntiLeg.onGet(async () => !!this.cached.antiLeg);
+      }
 
       try {
         this.eveHeatReq = this.service.getCharacteristic(EveHeatReqCharacteristic);
@@ -149,7 +189,9 @@ export class AristonHeaterAccessory {
           this.eveHeatReq = this.service.addCharacteristic(EveHeatReqCharacteristic);
         }
       }
-      if (this.eveHeatReq) this.eveHeatReq.onGet(async () => !!this.cached.heatReq);
+      if (this.eveHeatReq) {
+        this.eveHeatReq.onGet(async () => !!this.cached.heatReq);
+      }
 
       try {
         this.eveShowers = this.service.getCharacteristic(EveShowersCharacteristic);
@@ -160,7 +202,51 @@ export class AristonHeaterAccessory {
           this.eveShowers = this.service.addCharacteristic(EveShowersCharacteristic);
         }
       }
-      if (this.eveShowers) this.eveShowers.onGet(async () => this.getShowersCount());
+      if (this.eveShowers) {
+        this.eveShowers.onGet(async () => this.getShowersCount());
+      }
+
+      try {
+        this.eveMode = this.service.getCharacteristic(EveModeCharacteristic);
+      } catch {
+        try {
+          this.eveMode = this.service.addOptionalCharacteristic(EveModeCharacteristic);
+        } catch {
+          this.eveMode = this.service.addCharacteristic(EveModeCharacteristic);
+        }
+      }
+      if (this.eveMode) {
+        this.eveMode.onGet(async () => this.cached.mode ?? 0);
+      }
+
+      try {
+        this.eveModeName = this.service.getCharacteristic(EveModeNameCharacteristic);
+      } catch {
+        try {
+          this.eveModeName = this.service.addOptionalCharacteristic(EveModeNameCharacteristic);
+        } catch {
+          this.eveModeName = this.service.addCharacteristic(EveModeNameCharacteristic);
+        }
+      }
+      if (this.eveModeName) {
+        this.eveModeName.onGet(async () => this.getModeName(this.cached.mode));
+      }
+
+      try {
+        this.eveModeRange = this.service.getCharacteristic(EveModeRangeCharacteristic);
+      } catch {
+        try {
+          this.eveModeRange = this.service.addOptionalCharacteristic(EveModeRangeCharacteristic);
+        } catch {
+          this.eveModeRange = this.service.addCharacteristic(EveModeRangeCharacteristic);
+        }
+      }
+      if (this.eveModeRange) {
+        this.eveModeRange.onGet(async () => {
+          const range = this.getModeTemperatureRange(this.cached.mode);
+          return `${range.min}-${range.max}°C`;
+        });
+      }
     }
 
     this.initialize();
@@ -173,9 +259,41 @@ export class AristonHeaterAccessory {
     } catch {}
   }
 
+  /**
+   * Validates if a temperature reading is reasonable.
+   * Returns the value if valid, null if it's a placeholder/error value.
+   * Placeholder values are typically 0, negative, or far outside device range.
+   */
+  private validateTemp(value: number | null | undefined): number | null {
+    if (value === null || value === undefined) return null;
+    // Reasonable range for a water heater: 0-65°C
+    // Values like 33 without context or 0 are often placeholder/error values
+    if (value < 0 || value > 65) return null;
+    // If we see a value that's way outside configured range AND it's exactly 33 or 0,
+    // it's likely a placeholder being sent by the API in certain states
+    if ((value === 0 || value === 33) && (value < this.minTemp - 5 || value > this.maxTemp + 5)) {
+      return null;
+    }
+    return value;
+  }
+
   private async initialize() {
     try {
-      await this.client.login();
+      // Retry login with exponential backoff
+      let loginAttempt = 0;
+      const maxLoginAttempts = 3;
+      while (loginAttempt < maxLoginAttempts) {
+        try {
+          await this.client.login();
+          break;
+        } catch (e: any) {
+          loginAttempt++;
+          if (loginAttempt >= maxLoginAttempts) throw e;
+          const backoffMs = Math.min(1000 * Math.pow(2, loginAttempt - 1), 10000);
+          this.log.warn(`Login attempt ${loginAttempt} failed, retrying in ${Math.round(backoffMs / 1000)}s:`, e?.message || e);
+          await new Promise((r) => setTimeout(r, backoffMs));
+        }
+      }
       if (!this.plantId) {
         const devices = await this.client.discoverVelis();
         const first = devices[0];
@@ -184,15 +302,39 @@ export class AristonHeaterAccessory {
       }
       const best = await this.client.getBestVelisPlantData(this.plantId as string);
       this.variant = best.kind;
-      this.cached.currentTemp = (best.fields.currentTemp as number) ?? null;
-      this.cached.targetTemp = (best.fields.targetTemp as number) ?? null;
+      
+      // Validate and cache temperature readings
+      const currentTemp = this.validateTemp(best.fields.currentTemp as number);
+      const targetTemp = this.validateTemp(best.fields.targetTemp as number);
+      this.cached.currentTemp = currentTemp;
+      this.cached.targetTemp = targetTemp;
       this.cached.power = (best.fields.powerState as boolean) ?? null;
       this.cached.antiLeg = (best.fields.antiLeg as boolean) ?? null;
       this.cached.heatReq = (best.fields.heatReq as boolean) ?? null;
       this.cached.avShw = (best.fields.avShw as number) ?? null;
+      this.cached.mode = (best.fields.mode as number) ?? null;
+      
+      // Log if we detected placeholder/error values
+      if (best.fields.currentTemp !== undefined && best.fields.currentTemp !== null && currentTemp === null) {
+        this.log.debug(`Current temperature ${best.fields.currentTemp}°C discarded as placeholder value`);
+      }
+      if (best.fields.targetTemp !== undefined && best.fields.targetTemp !== null && targetTemp === null) {
+        this.log.debug(`Target temperature ${best.fields.targetTemp}°C discarded as placeholder value`);
+      }
+      
+      // Log mode if available
+      if (this.cached.mode !== null) {
+        const modeName = this.getModeName(this.cached.mode);
+        const modeRange = this.getModeTemperatureRange(this.cached.mode);
+        this.log.info(`Device mode: ${modeName} (${this.cached.mode}), temp range: ${modeRange.min}-${modeRange.max}°C`);
+      }
+      
       this.pushState();
       this.schedule();
+      this.deviceReady = true;
+      this.log.info('Device initialized successfully');
     } catch (e: any) {
+      this.deviceReady = false;
       this.log.error('Initialize error:', e?.message || e);
     }
   }
@@ -208,13 +350,34 @@ export class AristonHeaterAccessory {
     try {
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
-      const { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw } = best.fields as any;
-      this.cached.currentTemp = typeof currentTemp === 'number' ? currentTemp : this.cached.currentTemp;
-      this.cached.targetTemp = typeof targetTemp === 'number' ? targetTemp : this.cached.targetTemp;
+      const { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw, mode } = best.fields as any;
+      
+      // Validate temperatures before updating cache
+      const validCurrent = this.validateTemp(currentTemp);
+      const validTarget = this.validateTemp(targetTemp);
+      
+      if (validCurrent !== null) {
+        this.cached.currentTemp = validCurrent;
+      }
+      if (validTarget !== null) {
+        this.cached.targetTemp = validTarget;
+      }
       this.cached.power = typeof powerState === 'boolean' ? powerState : this.cached.power;
       this.cached.antiLeg = typeof antiLeg === 'boolean' ? antiLeg : this.cached.antiLeg;
       this.cached.heatReq = typeof heatReq === 'boolean' ? heatReq : this.cached.heatReq;
       this.cached.avShw = typeof avShw === 'number' ? avShw : this.cached.avShw;
+      
+      // Detect mode change
+      const oldMode = this.cached.mode;
+      const newMode = typeof mode === 'number' ? mode : this.cached.mode;
+      if (oldMode !== newMode && newMode !== null) {
+        const oldModeName = this.getModeName(oldMode);
+        const newModeName = this.getModeName(newMode);
+        const newModeRange = this.getModeTemperatureRange(newMode);
+        this.log.info(`Mode changed: ${oldModeName} (${oldMode}) → ${newModeName} (${newMode}), temp range: ${newModeRange.min}-${newModeRange.max}°C`);
+      }
+      this.cached.mode = newMode;
+      
       this.pushState();
       this.lastRefreshAt = Date.now();
     } catch (e: any) {
@@ -266,19 +429,72 @@ export class AristonHeaterAccessory {
 
     // Update Eve custom characteristics
     try {
-      if (this.eveAntiLeg && typeof this.cached.antiLeg === 'boolean') this.eveAntiLeg.updateValue(!!this.cached.antiLeg);
+      if (this.eveAntiLeg && typeof this.cached.antiLeg === 'boolean') {
+        this.eveAntiLeg.updateValue(!!this.cached.antiLeg);
+      }
     } catch {}
     try {
-      if (this.eveHeatReq && typeof this.cached.heatReq === 'boolean') this.eveHeatReq.updateValue(!!this.cached.heatReq);
+      if (this.eveHeatReq && typeof this.cached.heatReq === 'boolean') {
+        this.eveHeatReq.updateValue(!!this.cached.heatReq);
+      }
     } catch {}
     try {
-      if (this.eveShowers) this.eveShowers.updateValue(this.getShowersCount());
+      if (this.eveShowers) {
+        this.eveShowers.updateValue(this.getShowersCount());
+      }
+    } catch {}
+    try {
+      if (this.eveMode && typeof this.cached.mode === 'number') {
+        this.eveMode.updateValue(this.cached.mode);
+      }
+    } catch {}
+    try {
+      if (this.eveModeName) {
+        this.eveModeName.updateValue(this.getModeName(this.cached.mode));
+      }
+    } catch {}
+    try {
+      if (this.eveModeRange) {
+        const range = this.getModeTemperatureRange(this.cached.mode);
+        this.eveModeRange.updateValue(`${range.min}-${range.max}°C`);
+      }
     } catch {}
   }
 
   private getShowersCount(): number {
     const n = typeof this.cached.avShw === 'number' ? Math.round(this.cached.avShw) : 0;
     return Math.max(0, Math.min(4, n));
+  }
+
+  private getModeName(mode: number | null): string {
+    if (mode === null || mode === undefined) return 'Unknown';
+    const modeNames: Record<number, string> = {
+      1: 'iMemory',
+      2: 'Green',
+      7: 'Boost',
+    };
+    return modeNames[mode] || `Mode ${mode}`;
+  }
+
+  private getModeTemperatureRange(mode: number | null): { min: number; max: number } {
+    if (mode === null || mode === undefined) {
+      return { min: this.minTemp, max: this.maxTemp };
+    }
+    
+    // Mode-specific temperature ranges (from Ariston app behavior)
+    const ranges: Record<number, { min: number; max: number }> = {
+      1: { min: 40, max: 65 },     // iMemory
+      2: { min: 40, max: 53 },     // Green
+      7: { min: 40, max: 65 },     // Boost
+    };
+    
+    const modeRange = ranges[mode];
+    if (modeRange) {
+      return modeRange;
+    }
+    
+    // Fallback to configured range
+    return { min: this.minTemp, max: this.maxTemp };
   }
 
   private async onGetCurrentTemperature(): Promise<number> {
@@ -292,19 +508,20 @@ export class AristonHeaterAccessory {
   }
 
   private async onSetTargetTemperature(value: CharacteristicValue): Promise<void> {
+    if (!this.deviceReady) throw new Error('Device not ready yet. Try again in a moment.');
     if (!this.plantId || !this.variant) throw new Error('Device not ready');
     const vNum = typeof value === 'number' ? value : Number(value as any);
-  const v = Math.max(this.minTemp, Math.min(this.maxTemp, Math.round(vNum)));
+    const v = Math.max(this.minTemp, Math.min(this.maxTemp, Math.round(vNum)));
     const oldV = typeof this.cached.targetTemp === 'number' ? this.cached.targetTemp : v;
     try {
-      await this.client.setTemperature(this.variant, this.plantId, oldV as number, v, false);
+      await this.client.setTemperature(this.variant, this.plantId, oldV, v, false);
       this.cached.targetTemp = v;
       this.refresh().catch(() => {});
     } catch (e1: any) {
       this.log.warn('setTargetTemperature failed, re-probing variant:', e1?.message || e1);
       const best = await this.client.getBestVelisPlantData(this.plantId);
       this.variant = best.kind;
-      await this.client.setTemperature(this.variant, this.plantId, oldV as number, v, false);
+      await this.client.setTemperature(this.variant, this.plantId, oldV, v, false);
       this.cached.targetTemp = v;
       this.refresh().catch(() => {});
     }
@@ -317,6 +534,7 @@ export class AristonHeaterAccessory {
   }
 
   private async onSetTargetHeatingCoolingState(value: CharacteristicValue): Promise<void> {
+    if (!this.deviceReady) throw new Error('Device not ready yet. Try again in a moment.');
     if (!this.plantId || !this.variant) throw new Error('Device not ready');
     const C = this.api.hap.Characteristic;
     const num = typeof value === 'number' ? value : Number(value as any);

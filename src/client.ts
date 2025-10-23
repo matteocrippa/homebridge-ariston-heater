@@ -21,6 +21,7 @@ export interface PlantBest {
     antiLeg?: boolean;
     heatReq?: boolean;
     avShw?: number;
+    mode?: number;
   };
   score: number;
 }
@@ -52,11 +53,17 @@ export class AristonClient {
     this.password = password || process.env.ARISTON_PASS;
     this.log = log;
     this.debug = !!debug || process.env.ARISTON_DEBUG === '1' || process.env.DEBUG === '1';
+    
+    // Validate credentials exist
+    if (!this.username || !this.password) {
+      throw new Error('Ariston credentials (username/password) are required. Set via config or ARISTON_USER/ARISTON_PASS env vars');
+    }
+    
     this.http = axios.create({
       baseURL: this.baseURL,
       timeout: 15000,
       headers: { 'User-Agent': this.userAgent, 'Content-Type': 'application/json' },
-      // Accept up to 599 so axios doesn’t throw on 5xx; we’ll handle status checks explicitly.
+      // Accept up to 599 so axios doesn't throw on 5xx; we'll handle status checks explicitly.
       validateStatus: (s) => s >= 200 && s < 600,
     });
     this.storage = new VariantStorage(cacheDir, log);
@@ -74,6 +81,13 @@ export class AristonClient {
       return secs > 0 ? Math.min(600, secs) : 1;
     }
     return undefined;
+  }
+
+  private ensureToken() {
+    if (!this.token) {
+      throw new Error('Not authenticated. Call login() first.');
+    }
+    return this.token;
   }
 
   private async doGet(path: string, headers: Record<string, any>) {
@@ -103,7 +117,7 @@ export class AristonClient {
   }
 
   async discoverVelis(): Promise<any[]> {
-    const headers = { 'ar.authToken': this.token as string };
+    const headers = { 'ar.authToken': this.ensureToken() };
     const paths = ['velis/medPlants', 'velis/plants'];
     for (const p of paths) {
       try {
@@ -127,18 +141,20 @@ export class AristonClient {
     const antiLeg = get(raw, ['antiLeg', 'antiLegionella', 'antiLegionellaActive']);
     const heatReq = get(raw, ['heatReq', 'heatingReq', 'heatingRequest']);
     const avShw = get(raw, ['avShw', 'availableShowers', 'avShow']);
-    return { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw } as {
+    const mode = get(raw, ['mode']);
+    return { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw, mode } as {
       currentTemp?: number;
       targetTemp?: number;
       powerState?: boolean;
       antiLeg?: boolean;
       heatReq?: boolean;
       avShw?: number;
+      mode?: number;
     };
   }
 
   async getBestVelisPlantData(plantId: string): Promise<PlantBest> {
-    const headers = { 'ar.authToken': this.token as string };
+    const headers = { 'ar.authToken': this.ensureToken() };
     const cached = this.storage.getVariant(plantId)?.variant;
     if (cached) {
       try {
@@ -199,7 +215,7 @@ export class AristonClient {
   }
 
   async setTemperature(variantKind: string, plantId: string, oldTemp: number, newTemp: number, eco = false) {
-    const headers = { 'ar.authToken': this.token as string };
+    const headers = { 'ar.authToken': this.ensureToken() };
     const url = `velis/${variantKind}/${encodeURIComponent(plantId)}/temperature`;
     const body = { eco: !!eco, old: oldTemp, new: newTemp };
     const res = await this.http.post(url, body, { headers });
@@ -208,7 +224,7 @@ export class AristonClient {
   }
 
   async setPower(variantKind: string, plantId: string, on: boolean) {
-    const headers = { 'ar.authToken': this.token as string };
+    const headers = { 'ar.authToken': this.ensureToken() };
     const url = `velis/${variantKind}/${encodeURIComponent(plantId)}/switch`;
     const res = await this.http.post(url, !!on, { headers });
     if (this.debug) this.log.log(`[POST ${url}] status=${res.status}`);
