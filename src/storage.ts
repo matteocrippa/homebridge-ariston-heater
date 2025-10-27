@@ -54,4 +54,18 @@ export class VariantStorage {
     this.cache.variants[plantId] = { variant, updatedAt: new Date().toISOString() };
     this.save();
   }
+
+  clearVariant(plantId: string) {
+    if (this.cache.variants && this.cache.variants[plantId]) {
+      delete this.cache.variants[plantId];
+      this.save();
+    }
+  }
+
+  isVariantStale(plantId: string, maxAgeMinutes = 60): boolean {
+    const entry = this.cache.variants?.[plantId];
+    if (!entry) return true;
+    const age = Date.now() - new Date(entry.updatedAt).getTime();
+    return age > maxAgeMinutes * 60 * 1000;
+  }
 }

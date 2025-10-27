@@ -381,10 +381,31 @@ export class AristonHeaterAccessory {
       this.pushState();
       this.lastRefreshAt = Date.now();
     } catch (e: any) {
-  const msg = e?.message || String(e);
-  const isRate = e?.name === 'RateLimitError';
-  const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : 500;
-  this.log.warn(isRate ? 'Rate limited, backing off:' : 'Refresh failed:', msg, isRate ? `(retry in ${Math.round(delay / 1000)}s)` : '');
+      const msg = e?.message || String(e);
+      const isRate = e?.name === 'RateLimitError';
+      const isAuth = msg.includes('Authentication failed') || msg.includes('authorized');
+      const isNoData = msg.includes('No plant data');
+      const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : (isAuth ? 5000 : 500);
+      
+      let logMsg = 'Refresh failed:';
+      if (isRate) logMsg = 'Rate limited, backing off:';
+      if (isAuth) logMsg = 'Authentication failed, will retry:';
+      if (isNoData) logMsg = 'No plant data from API (all endpoints returned empty/invalid data):';
+      
+      this.log.warn(
+        logMsg,
+        msg,
+        (isRate || isAuth) ? `(retry in ${Math.round(delay / 1000)}s)` : '',
+      );
+      
+      // Add additional context for "No plant data" errors
+      if (isNoData) {
+        this.log.warn(
+          'This may be due to: (1) Device offline, (2) Token expired (will auto-refresh), (3) API issue.',
+          'Check official Ariston app to verify device is online.',
+        );
+      }
+      
       try {
         await new Promise((r) => setTimeout(r, delay));
       } catch {}
