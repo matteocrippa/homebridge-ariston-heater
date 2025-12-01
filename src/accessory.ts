@@ -385,25 +385,32 @@ export class AristonHeaterAccessory {
       const isRate = e?.name === 'RateLimitError';
       const isAuth = msg.includes('Authentication failed') || msg.includes('authorized');
       const isNoData = msg.includes('No plant data');
-      const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : (isAuth ? 5000 : 500);
+      const isServerIssue = msg.includes('API server issues') || msg.includes('server errors') || msg.includes('timeouts');
+      const delay = isRate && typeof e?.retryAfter === 'number' ? Math.max(1000, e.retryAfter * 1000) : (isAuth ? 5000 : (isServerIssue ? 30000 : 500));
       
       let logMsg = 'Refresh failed:';
       if (isRate) logMsg = 'Rate limited, backing off:';
       if (isAuth) logMsg = 'Authentication failed, will retry:';
-      if (isNoData) logMsg = 'No plant data from API (all endpoints returned empty/invalid data):';
+      if (isServerIssue) logMsg = 'Ariston API server issues (will retry):';
+      if (isNoData) logMsg = 'No plant data from API:';
       
       this.log.warn(
         logMsg,
         msg,
-        (isRate || isAuth) ? `(retry in ${Math.round(delay / 1000)}s)` : '',
+        `(retry in ${Math.round(delay / 1000)}s)`,
       );
       
-      // Add additional context for "No plant data" errors
-      if (isNoData) {
+      // Add additional context for persistent errors
+      if (isNoData && !isServerIssue) {
         this.log.warn(
           'This may be due to: (1) Device offline, (2) Token expired (will auto-refresh), (3) API issue.',
           'Check official Ariston app to verify device is online.',
         );
+      }
+      
+      // On server issues, cached data remains valid - just log that we're using stale data
+      if (isServerIssue && this.cached.currentTemp !== null) {
+        this.log.info('Using cached data while API is unavailable. Cached values may be stale.');
       }
       
       try {

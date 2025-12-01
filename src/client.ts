@@ -192,29 +192,33 @@ export class AristonClient {
     const cached = this.storage.getVariant(plantId)?.variant;
     const isStale = this.storage.isVariantStale(plantId, 60);
     
-    // Try cached variant first (unless stale or invalid response)
-    if (cached && !isStale) {
+    // Try cached variant first - even if stale, try it before full discovery
+    if (cached) {
       try {
         const url = `velis/${cached}/${encodeURIComponent(plantId)}`;
         const res = await this.doGet(url, headers);
-        if (this.debug) this.log.log(`[GET ${url}] status=${res.status} (cached)`);
+        if (this.debug) this.log.log(`[GET ${url}] status=${res.status} (cached${isStale ? ', stale' : ''})`);
         if (res.status === 200 && res.data && Object.keys(res.data as any).length > 0) {
           const fields = this.extractFields(res.data);
+          // Update cache timestamp on successful fetch (refreshes staleness)
+          this.storage.setVariant(plantId, cached);
           return { kind: cached, data: res.data, fields, score: 99 };
         }
-        // If cached variant returned empty data, clear it and try full discovery
+        // If cached variant returned empty data or 500, try full discovery
         if (res.status === 200 && (!res.data || !Object.keys(res.data as any).length)) {
-          this.log.warn(`Cached variant ${cached} returned empty data, clearing cache and re-discovering...`);
-          this.storage.clearVariant(plantId);
+          this.log.warn(`Cached variant ${cached} returned empty data, trying full discovery...`);
+        } else if (res.status >= 500) {
+          this.log.warn(`Cached variant ${cached} returned server error (${res.status}), trying full discovery...`);
         }
       } catch (e: any) {
         if (e instanceof RateLimitError) throw e;
+        // Don't clear cache on transient errors - the cached variant is still valid
         this.log.warn(`Cached variant ${cached} failed: ${e?.message || e}, trying full discovery...`);
-        this.storage.clearVariant(plantId);
       }
-    } else if (isStale) {
-      this.log.debug(`Cached variant for ${plantId} is stale (>60 min), re-discovering...`);
-      this.storage.clearVariant(plantId);
+    }
+    
+    if (isStale && cached) {
+      this.log.log(`Cached variant for ${plantId} is stale (>60 min), attempting re-discovery...`);
     }
 
     const variants = ['sePlantData', 'medPlantData', 'slpPlantData', 'onePlantData', 'evoPlantData'];
@@ -234,6 +238,8 @@ export class AristonClient {
     let saw429 = false;
     let maxRetryAfter: number | undefined;
     let saw401 = false;
+    let saw5xx = 0;
+    let sawTimeout = 0;
     
     for (const v of variants) {
       const url = `velis/${v}/${encodeURIComponent(plantId)}`;
@@ -243,13 +249,16 @@ export class AristonClient {
           const fields = this.extractFields(res.data);
           const score = scoreCandidate(fields);
           candidates.push({ kind: v, data: res.data, fields, score });
+        } else if (res.status >= 500) {
+          saw5xx++;
         }
       } catch (e: any) {
         if (e instanceof RateLimitError) {
           saw429 = true;
           if (typeof e.retryAfter === 'number') maxRetryAfter = Math.max(maxRetryAfter || 0, e.retryAfter);
-        }
-        if (e?.message?.includes('Authentication failed') || e?.message?.includes('unauthorized')) {
+        } else if (e?.message?.includes('timeout')) {
+          sawTimeout++;
+        } else if (e?.message?.includes('Authentication failed') || e?.message?.includes('unauthorized')) {
           saw401 = true;
         }
         if (this.debug) this.log.error(`[GET ${url}] error: ${e?.message || e}`);
@@ -260,6 +269,10 @@ export class AristonClient {
     if (!candidates.length) {
       if (saw429) throw new RateLimitError('Rate limited', maxRetryAfter);
       if (saw401) throw new Error('Authentication failed. Please check your credentials.');
+      // If we saw server errors or timeouts, indicate this is likely transient
+      if (saw5xx > 0 || sawTimeout > 0) {
+        throw new Error(`API server issues (${saw5xx} server errors, ${sawTimeout} timeouts). Ariston servers may be temporarily unavailable.`);
+      }
       throw new Error('No plant data. All variant endpoints returned empty or invalid data.');
     }
     
