@@ -170,7 +170,7 @@ export class AristonClient {
       return k ? o[k] : undefined;
     };
     const currentTemp = get(raw, ['temp', 'wtrTemp', 'currentTemp', 'currTemp', 'tCur']);
-    const targetTemp = get(raw, ['procReqTemp', 'reqTemp', 'targetTemp', 'tSet']);
+    const targetTemp = get(raw, ['reqTemp', 'procReqTemp', 'targetTemp', 'tSet']);
     const powerState = get(raw, ['on', 'power', 'pwr']);
     const antiLeg = get(raw, ['antiLeg', 'antiLegionella', 'antiLegionellaActive']);
     const heatReq = get(raw, ['heatReq', 'heatingReq', 'heatingRequest']);
