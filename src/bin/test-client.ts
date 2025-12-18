@@ -14,7 +14,11 @@ try {
       if (!m) continue;
       const [, k, vRaw] = m as any;
       let v = vRaw;
-      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith('\'') && v.endsWith('\''))) v = v.slice(1, -1);
+      if (
+        (v.startsWith('"') && v.endsWith('"')) ||
+        (v.startsWith('\'') && v.endsWith('\''))
+      )
+        v = v.slice(1, -1);
       if (!(k in process.env)) (process.env as any)[k] = v;
     }
   }
@@ -23,20 +27,34 @@ try {
 (async () => {
   try {
     const cacheDir = process.env.ARISTON_CACHE_DIR || process.cwd();
-    const client = new AristonClient({ cacheDir, log: console });
+    const client = new AristonClient({ cacheDir, log: console, debug: true });
+
+    // Login
     await client.login();
-    const gw = process.env.ARISTON_PLANT;
-    if (!gw) {
-      const devices = await client.discoverVelis();
-      console.log(JSON.stringify(devices, null, 2));
-      if (!devices.length) return;
-      const d: any = devices[0];
-      const first = d.gw || d.gateway || d.id || d.plantId;
-      const best = await client.getBestVelisPlantData(first);
-      console.log(JSON.stringify({ plant: first, variant: best.kind, fields: best.fields, raw: best.data }, null, 2));
+    console.log('Login successful\n');
+
+    // Get plant ID
+    let plantId: string | null = process.env.ARISTON_PLANT || null;
+    if (!plantId) {
+      plantId = await client.discoverPlantId();
+      if (!plantId) {
+        console.error('No devices found');
+        process.exit(1);
+      }
+      console.log(`Discovered plant: ${plantId}\n`);
+    }
+
+    // Discover variant
+    const variant = await client.discoverVariant(plantId);
+    console.log(`Using variant: ${variant}\n`);
+
+    // Get plant data
+    const data = await client.getPlantData(plantId, variant);
+    if (data) {
+      console.log('Plant Data:');
+      console.log(JSON.stringify(data, null, 2));
     } else {
-      const best = await client.getBestVelisPlantData(gw);
-      console.log(JSON.stringify({ plant: gw, variant: best.kind, fields: best.fields, raw: best.data }, null, 2));
+      console.log('No data returned');
     }
   } catch (e: any) {
     console.error('Error:', e?.message || e);

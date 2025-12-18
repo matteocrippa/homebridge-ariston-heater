@@ -15,7 +15,10 @@ export class VariantStorage {
   private cache: CacheShape;
   private log: { warn?: (...args: any[]) => void } | Console;
 
-  constructor(baseDir?: string, log: { warn?: (...args: any[]) => void } | Console = console) {
+  constructor(
+    baseDir?: string,
+    log: { warn?: (...args: any[]) => void } | Console = console,
+  ) {
     this.log = log;
     const dir = baseDir || process.cwd();
     this.file = path.join(dir, 'ariston-cache.json');
@@ -50,8 +53,11 @@ export class VariantStorage {
   }
 
   setVariant(plantId: string, variant: string) {
-    if (!this.cache.variants) this.cache.variants = {} as any;
-    this.cache.variants[plantId] = { variant, updatedAt: new Date().toISOString() };
+    if (!this.cache.variants) this.cache.variants = {};
+    this.cache.variants[plantId] = {
+      variant,
+      updatedAt: new Date().toISOString(),
+    };
     this.save();
   }
 
@@ -60,12 +66,5 @@ export class VariantStorage {
       delete this.cache.variants[plantId];
       this.save();
     }
-  }
-
-  isVariantStale(plantId: string, maxAgeMinutes = 60): boolean {
-    const entry = this.cache.variants?.[plantId];
-    if (!entry) return true;
-    const age = Date.now() - new Date(entry.updatedAt).getTime();
-    return age > maxAgeMinutes * 60 * 1000;
   }
 }

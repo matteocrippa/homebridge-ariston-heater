@@ -14,138 +14,139 @@ Homebridge plugin for Ariston NET Velis/Lydos water heaters. It discovers your p
 
 ## Installation
 
-1. From this repo root, `cd homebridge-ariston-heater` and install dependencies.
-2. Publish or use locally via `npm link`.
-3. Optional: test the network client without Homebridge using `.env` and the CLI:
+1. Install via Homebridge UI or npm:
+   ```bash
+   npm install -g homebridge-ariston-heater
+   ```
+
+2. Configure the plugin (see Configuration below)
+
+3. Restart Homebridge
+
+### Test Client (Optional)
+
+You can test your credentials without Homebridge:
 
 ```bash
 # Copy .env.example to .env and fill in your credentials
 cp .env.example .env
-# Edit .env with your Ariston credentials
-nano .env
 
-# Then run the test client
+# Run the test client
 ariston-test-client
 ```
 
-### Environment Variables (for test-client)
+## Configuration
 
-Create a `.env` file in the project root (see `.env.example` for reference):
+Add this to your Homebridge `config.json`:
 
-```bash
-ARISTON_USER=your.email@example.com      # Required: your Ariston NET email
-ARISTON_PASS=your_password               # Required: your Ariston NET password
-ARISTON_PLANT=plant_id_optional          # Optional: specify a plant ID; omit to auto-discover
-ARISTON_DEBUG=1                          # Optional: enable debug logging
-```
-
-## Configuration (config.json)
-
-### Boilerplate
-
-Copy/paste this into your Homebridge `config.json` and adjust values as needed:
-
-```
+```json
 {
   "platforms": [
     {
       "platform": "AristonHeater",
       "name": "Ariston Heater",
-      "username": "<ariston email>",
-      "password": "<ariston password>",
-      
-      // Optional: specify a Plant/Gateway ID; leave out to auto-discover the first device
-      "gateway": "<plant id optional>",
-
-      // Polling and on-demand refresh
-      "pollInterval": 1800,                     // seconds; min 1800; default 1800 (30 min)
-      "refreshOnGet": true,                     // trigger background refresh when viewing the accessory
-      "refreshOnGetCooldownSeconds": 10,        // min gap between on-demand refreshes
-
-      // Temperature range exposed to HomeKit
-      "minTemp": 35,                            // °C
-      "maxTemp": 70,                            // °C
-
-      // Extras / logging
-      "eveCharacteristics": true,               // expose AntiLegionella/HeatingActive/Showers in Eve app
+      "username": "your.email@example.com",
+      "password": "your_password",
+      "gateway": "",
+      "pollInterval": 1800,
+      "minTemp": 40,
+      "maxTemp": 65,
       "debug": false
     }
   ]
 }
 ```
 
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `username` | string | **required** | Your Ariston NET email |
+| `password` | string | **required** | Your Ariston NET password |
+| `gateway` | string | auto-discover | Plant/Gateway ID. Leave empty to auto-discover |
+| `pollInterval` | number | 1800 | Refresh interval in seconds (min: 300, default: 1800) |
+| `minTemp` | number | 40 | Minimum temperature (°C) exposed to HomeKit |
+| `maxTemp` | number | 65 | Maximum temperature (°C) exposed to HomeKit |
+| `debug` | boolean | false | Enable verbose logging |
+
+### Migration from v0.2.x
+
+v0.3.0 removes some configuration options that are no longer needed:
+
+- ❌ `eveCharacteristics` - Removed (Eve characteristics no longer supported)
+- ❌ `refreshOnGet` - Removed (no longer triggers API calls on read)
+- ❌ `refreshOnGetCooldownSeconds` - Removed
+
+Simply remove these options from your config if present.
+
 ### Migration from v0.1.x
 
-If you're upgrading from an earlier version, **move the configuration from `accessories` to `platforms` array**:
+Move configuration from `accessories` to `platforms` array:
 
-**Old format (v0.1.x):**
-```json
-{
-  "accessories": [
-    {
-      "accessory": "AristonHeater",
-      "name": "Ariston Heater",
-      ...
-    }
-  ]
-}
-```
-
-**New format (v0.2.0+):**
 ```json
 {
   "platforms": [
     {
       "platform": "AristonHeater",
-      "name": "Ariston Heater",
       ...
     }
   ]
 }
 ```
 
-After updating the config, restart Homebridge. The accessory should appear automatically.
-
 ## Features
 
-- Auto discovery (if `gateway` not set)
-- Reads current and target temperature
-- Sets target temperature (default 35–70°C; configurable)
-- Power on/off mapped to Heating/Cooling State (OFF/HEAT)
-- Auto-selects best Velis variant by scoring returned payloads and ignoring zeroed responses
-- Eve-only extra fields (visible in Eve app, hidden from Apple Home):
-  - Anti Legionella (boolean)
-  - Heating Request (boolean)
-  - Showers (0–4)
-- Gentle cloud polling (default/min every 30 minutes) with on-demand refresh when opening the accessory tile
+- **Auto discovery** - Finds your device automatically if `gateway` not set
+- **Temperature reading** - Current and target temperature
+- **Temperature control** - Set target temperature (40–65°C default)
+- **Power control** - On/off mapped to Heating State (OFF/HEAT)
+- **Smart variant detection** - Auto-selects best Velis API variant
+- **Rate limit protection** - Progressive backoff prevents API throttling
+- **Reliable caching** - Continues working during API outages
 
-## Project structure
+## How It Works
 
-- `src/client.ts`: network client (login, discovery, read/write, variant selection)
-- `src/accessory.ts`: Homebridge accessory wiring using the client
-- `src/index.ts`: Homebridge registration entry
-- `src/bin/test-client.ts`: standalone CLI source; published binary is `dist/bin/test-client.js`
+1. **Startup**: Logs in → Discovers device → Detects API variant (cached)
+2. **Running**: Single API call every 30 minutes (configurable)
+3. **On failure**: Backs off progressively, retries with increasing delays
+4. **Variant re-discovery**: Only after 5 consecutive failures
 
-## Notes
+This design minimizes API calls to prevent rate limiting issues.
 
-- Requires Ariston NET cloud account credentials (same as the mobile app).
-- For many Lydos/Velis devices, `sePlantData` is commonly selected; other variants are tried as needed.
-- If behavior seems off, delete the cache file (`ariston-cache.json`) from the Homebridge storage path to force re-detection of the variant.
-- Rate limiting: the plugin gracefully backs off on HTTP 429 responses using Retry-After headers. Consider increasing `pollInterval` if you encounter frequent 429s.
+## Troubleshooting
 
-### Options
+### "No plant data" or rate limiting errors
 
-- `gateway` (string): Plant ID (gateway). Leave empty to auto-discover.
-- `pollInterval` (number): Refresh cadence in seconds. Default/minimum 1800 (30 minutes). For quicker updates, rely on on-demand refresh when opening the accessory.
-- `minTemp`/`maxTemp` (number): Allowed range for target temperature.
-- `eveCharacteristics` (boolean): Expose Eve-only extra fields on the Thermostat service. Default true.
-- `refreshOnGet` (boolean): Trigger a background refresh when the accessory is viewed/read. Default true.
-- `refreshOnGetCooldownSeconds` (number): Minimum seconds between on-demand refreshes. Default 10.
-- `debug` (boolean): Verbose logging.
+1. Delete the cache file to force re-discovery:
+   ```bash
+   rm ~/.homebridge/ariston-cache.json
+   ```
+
+2. Restart Homebridge
+
+3. If issues persist, increase `pollInterval` to 3600 (1 hour)
+
+### Device not found
+
+1. Verify your credentials work in the official Ariston NET app
+2. Check that your device is online in the app
+3. Enable `debug: true` to see detailed logs
+
+### Wrong temperatures
+
+The plugin reads `reqTemp` (user-set temperature) for target and `temp` for current. If values seem wrong, the API variant may have changed. Delete the cache file and restart.
+
+## Project Structure
+
+- `src/client.ts` - API client (login, discovery, read/write)
+- `src/accessory.ts` - Homebridge accessory implementation
+- `src/storage.ts` - Variant cache storage
+- `src/index.ts` - Homebridge platform registration
+- `src/bin/test-client.ts` - Standalone CLI for testing
 
 ## License
 
-MIT. Portions inspired by the Home Assistant Ariston integration (MIT). See LICENSE.
+MIT. See [LICENSE](LICENSE).
 
 ## Credits
 

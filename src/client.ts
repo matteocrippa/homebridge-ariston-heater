@@ -11,289 +11,257 @@ export interface AristonClientOpts {
   cacheDir?: string;
 }
 
-export interface PlantBest {
-  kind: string;
-  data: any;
-  fields: {
-    currentTemp?: number;
-    targetTemp?: number;
-    powerState?: boolean;
-    antiLeg?: boolean;
-    heatReq?: boolean;
-    avShw?: number;
-    mode?: number;
-  };
-  score: number;
-}
-
-export class RateLimitError extends Error {
-  retryAfter?: number;
-  constructor(message: string, retryAfter?: number) {
-    super(message);
-    this.name = 'RateLimitError';
-    this.retryAfter = retryAfter;
-  }
+export interface PlantData {
+  variant: string;
+  raw: any;
+  currentTemp?: number;
+  targetTemp?: number;
+  power?: boolean;
+  antiLeg?: boolean;
+  heatReq?: boolean;
+  avShw?: number;
+  mode?: number;
 }
 
 export class AristonClient {
   private http: AxiosInstance;
   private token: string | null = null;
   private storage: VariantStorage;
-  private baseURL: string;
-  private userAgent: string;
-  private username?: string;
-  private password?: string;
   private log: Console;
   private debug: boolean;
+  private username?: string;
+  private password?: string;
 
-  constructor({ baseURL, userAgent, username, password, log = console, debug = false, cacheDir }: AristonClientOpts = {}) {
-    this.baseURL = baseURL || process.env.ARISTON_API || 'https://www.ariston-net.remotethermo.com/api/v2/';
-    this.userAgent = userAgent || process.env.ARISTON_UA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0';
-    this.username = username || process.env.ARISTON_USER;
-    this.password = password || process.env.ARISTON_PASS;
-    this.log = log;
-    this.debug = !!debug || process.env.ARISTON_DEBUG === '1' || process.env.DEBUG === '1';
-    
-    // Validate credentials exist
+  constructor(opts: AristonClientOpts = {}) {
+    const baseURL =
+      opts.baseURL || 'https://www.ariston-net.remotethermo.com/api/v2/';
+    const userAgent =
+      opts.userAgent ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0';
+
+    this.username = opts.username || process.env.ARISTON_USER;
+    this.password = opts.password || process.env.ARISTON_PASS;
+    this.log = opts.log || console;
+    this.debug = opts.debug || false;
+    this.storage = new VariantStorage(opts.cacheDir, this.log);
+
     if (!this.username || !this.password) {
-      throw new Error('Ariston credentials (username/password) are required. Set via config or ARISTON_USER/ARISTON_PASS env vars');
+      throw new Error('Ariston credentials required');
     }
-    
+
     this.http = axios.create({
-      baseURL: this.baseURL,
-      timeout: 15000,
-      headers: { 'User-Agent': this.userAgent, 'Content-Type': 'application/json' },
-      // Accept up to 599 so axios doesn't throw on 5xx; we'll handle status checks explicitly.
-      validateStatus: (s) => s >= 200 && s < 600,
+      baseURL,
+      timeout: 30000,
+      headers: { 'User-Agent': userAgent, 'Content-Type': 'application/json' },
+      validateStatus: () => true, // Handle all status codes manually
     });
-    this.storage = new VariantStorage(cacheDir, log);
   }
 
-  private parseRetryAfter(v: any): number | undefined {
-    if (!v) return undefined;
-    // Retry-After can be seconds or HTTP-date
-    const s = String(v);
-    const asNum = Number(s);
-    if (Number.isFinite(asNum) && asNum > 0) return Math.min(600, Math.max(1, Math.floor(asNum))); // cap to 10 minutes
-    const d = Date.parse(s);
-    if (!Number.isNaN(d)) {
-      const secs = Math.ceil((d - Date.now()) / 1000);
-      return secs > 0 ? Math.min(600, secs) : 1;
-    }
-    return undefined;
+  private delay(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
-  private ensureToken() {
-    if (!this.token) {
-      throw new Error('Not authenticated. Call login() first.');
-    }
-    return this.token;
-  }
-
-  private async doGet(path: string, headers: Record<string, any>, retryOnUnauth = true): Promise<any> {
-    const res = await this.http.get(path, { headers });
-    if (this.debug) this.log.log(`[GET ${path}] status=${res.status}`);
-    if (res.status === 429) {
-      const ra = this.parseRetryAfter((res.headers as any)?.['retry-after']);
-      throw new RateLimitError('Rate limited', ra);
-    }
-    // Handle token expiration: 401 means re-login and retry
-    if (res.status === 401 && retryOnUnauth) {
-      this.log.warn(`[GET ${path}] Got 401 (unauthorized), re-authenticating...`);
-      try {
-        await this.login();
-        const newHeaders = { ...headers, 'ar.authToken': this.ensureToken() };
-        return this.doGet(path, newHeaders, false); // retry once without re-trying again
-      } catch (e: any) {
-        this.log.error('Re-authentication failed:', e?.message || e);
-        throw new Error(`Authentication failed: ${e?.message || e}`);
-      }
-    }
-    return res;
-  }
-
-  private async doPost(path: string, body: any, headers: Record<string, any>, retryOnUnauth = true): Promise<any> {
-    const res = await this.http.post(path, body, { headers });
-    if (this.debug) this.log.log(`[POST ${path}] status=${res.status}`);
-    if (res.status === 429) {
-      const ra = this.parseRetryAfter((res.headers as any)?.['retry-after']);
-      throw new RateLimitError('Rate limited', ra);
-    }
-    // Handle token expiration: 401 means re-login and retry
-    if (res.status === 401 && retryOnUnauth) {
-      this.log.warn(`[POST ${path}] Got 401 (unauthorized), re-authenticating...`);
-      try {
-        await this.login();
-        const newHeaders = { ...headers, 'ar.authToken': this.ensureToken() };
-        return this.doPost(path, body, newHeaders, false); // retry once without re-trying again
-      } catch (e: any) {
-        this.log.error('Re-authentication failed:', e?.message || e);
-        throw new Error(`Authentication failed: ${e?.message || e}`);
-      }
-    }
-    return res;
-  }
-
-  async login(): Promise<string> {
-    const body = {
+  async login(): Promise<void> {
+    const res = await this.http.post('accounts/login', {
       usr: this.username,
       pwd: this.password,
       imp: false,
       notTrack: true,
-      appInfo: { os: 2, appVer: '5.6.7772.40151', appId: 'com.remotethermo.aristonnet' },
-    };
-    const res = await this.http.post('accounts/login', body);
-  if (this.debug) this.log.log(`[login] status=${res.status}`);
-    if (res.status !== 200 || !(res.data && (res.data as any).token)) throw new Error(`Login failed (${res.status})`);
-    const token = (res.data as any).token as string;
-    this.token = token;
-    return token;
+      appInfo: {
+        os: 2,
+        appVer: '5.6.7772.40151',
+        appId: 'com.remotethermo.aristonnet',
+      },
+    });
+
+    if (res.status !== 200 || !res.data?.token) {
+      throw new Error(`Login failed (${res.status})`);
+    }
+
+    this.token = res.data.token;
+    if (this.debug) this.log.log('Login successful');
   }
 
-  async discoverVelis(): Promise<any[]> {
-    const headers = { 'ar.authToken': this.ensureToken() };
-    const paths = ['velis/medPlants', 'velis/plants'];
-    for (const p of paths) {
-      try {
-        const res = await this.doGet(p, headers);
-        if (res.status === 200 && Array.isArray(res.data) && res.data.length) return res.data as any[];
-      } catch (e) {
-        if (e instanceof RateLimitError) throw e;
+  async discoverPlantId(): Promise<string | null> {
+    if (!this.token) throw new Error('Not logged in');
+
+    const headers = { 'ar.authToken': this.token };
+
+    for (const path of ['velis/medPlants', 'velis/plants']) {
+      const res = await this.http.get(path, { headers });
+      if (
+        res.status === 200 &&
+        Array.isArray(res.data) &&
+        res.data.length > 0
+      ) {
+        const plant = res.data[0];
+        return plant.gw || plant.gateway || plant.id || plant.plantId || null;
       }
     }
-    return [];
+
+    return null;
   }
 
-  private extractFields(raw: any) {
-    const get = (o: any, ks: string[]) => {
-      const k = ks.find((key) => o && Object.prototype.hasOwnProperty.call(o, key) && o[key] != null);
-      return k ? o[k] : undefined;
-    };
-    const currentTemp = get(raw, ['temp', 'wtrTemp', 'currentTemp', 'currTemp', 'tCur']);
-    const targetTemp = get(raw, ['reqTemp', 'procReqTemp', 'targetTemp', 'tSet']);
-    const powerState = get(raw, ['on', 'power', 'pwr']);
-    const antiLeg = get(raw, ['antiLeg', 'antiLegionella', 'antiLegionellaActive']);
-    const heatReq = get(raw, ['heatReq', 'heatingReq', 'heatingRequest']);
-    const avShw = get(raw, ['avShw', 'availableShowers', 'avShow']);
-    const mode = get(raw, ['mode']);
-    return { currentTemp, targetTemp, powerState, antiLeg, heatReq, avShw, mode } as {
-      currentTemp?: number;
-      targetTemp?: number;
-      powerState?: boolean;
-      antiLeg?: boolean;
-      heatReq?: boolean;
-      avShw?: number;
-      mode?: number;
-    };
-  }
-
-  async getBestVelisPlantData(plantId: string): Promise<PlantBest> {
-    const headers = { 'ar.authToken': this.ensureToken() };
+  /**
+   * One-time discovery to find which variant works for this device.
+   * Called once at startup, result is cached.
+   */
+  async discoverVariant(plantId: string): Promise<string> {
+    // Check cache first
     const cached = this.storage.getVariant(plantId)?.variant;
-    const isStale = this.storage.isVariantStale(plantId, 60);
-    
-    // Try cached variant first - even if stale, try it before full discovery
     if (cached) {
-      try {
-        const url = `velis/${cached}/${encodeURIComponent(plantId)}`;
-        const res = await this.doGet(url, headers);
-        if (this.debug) this.log.log(`[GET ${url}] status=${res.status} (cached${isStale ? ', stale' : ''})`);
-        if (res.status === 200 && res.data && Object.keys(res.data as any).length > 0) {
-          const fields = this.extractFields(res.data);
-          // Update cache timestamp on successful fetch (refreshes staleness)
-          this.storage.setVariant(plantId, cached);
-          return { kind: cached, data: res.data, fields, score: 99 };
-        }
-        // If cached variant returned empty data or 500, try full discovery
-        if (res.status === 200 && (!res.data || !Object.keys(res.data as any).length)) {
-          this.log.warn(`Cached variant ${cached} returned empty data, trying full discovery...`);
-        } else if (res.status >= 500) {
-          this.log.warn(`Cached variant ${cached} returned server error (${res.status}), trying full discovery...`);
-        }
-      } catch (e: any) {
-        if (e instanceof RateLimitError) throw e;
-        // Don't clear cache on transient errors - the cached variant is still valid
-        this.log.warn(`Cached variant ${cached} failed: ${e?.message || e}, trying full discovery...`);
-      }
-    }
-    
-    if (isStale && cached) {
-      this.log.log(`Cached variant for ${plantId} is stale (>60 min), attempting re-discovery...`);
+      if (this.debug) this.log.log(`Using cached variant: ${cached}`);
+      return cached;
     }
 
-    const variants = ['sePlantData', 'medPlantData', 'slpPlantData', 'onePlantData', 'evoPlantData'];
-    const isNum = (v: any) => typeof v === 'number' && Number.isFinite(v);
-    const gt0 = (v: any) => isNum(v) && v > 0 && v < 100;
-    const scoreCandidate = (f: { currentTemp?: number; targetTemp?: number; powerState?: boolean }) => {
-      let score = 0;
-      if (gt0(f.currentTemp)) score += 3;
-      if (gt0(f.targetTemp)) score += 2;
-      if (typeof f.powerState === 'boolean') score += 1;
-      const bothZeroOrNull = (!isNum(f.currentTemp) || f.currentTemp === 0) && (!isNum(f.targetTemp) || f.targetTemp === 0);
-      if (bothZeroOrNull && f.powerState === false) score = 0;
-      return score;
+    if (!this.token) throw new Error('Not logged in');
+
+    const headers = { 'ar.authToken': this.token };
+    const variants = [
+      'sePlantData',
+      'medPlantData',
+      'slpPlantData',
+      'onePlantData',
+      'evoPlantData',
+    ];
+
+    this.log.info(`Discovering variant for ${plantId}...`);
+
+    for (const variant of variants) {
+      try {
+        const url = `velis/${variant}/${encodeURIComponent(plantId)}`;
+        const res = await this.http.get(url, { headers });
+
+        if (this.debug) {
+          this.log.log(`Trying ${variant}: status=${res.status}`);
+        }
+
+        if (res.status === 200 && res.data && typeof res.data === 'object') {
+          const data = res.data;
+          // Check if response has any useful data
+          if (
+            data.temp !== undefined ||
+            data.reqTemp !== undefined ||
+            data.on !== undefined
+          ) {
+            this.log.info(`Found working variant: ${variant}`);
+            this.storage.setVariant(plantId, variant);
+            return variant;
+          }
+        }
+
+        // Small delay between discovery attempts to avoid rate limiting
+        await this.delay(1000);
+      } catch (e: any) {
+        if (this.debug) this.log.log(`Variant ${variant} failed: ${e.message}`);
+        await this.delay(1000);
+      }
+    }
+
+    throw new Error('Could not find working variant for this device');
+  }
+
+  /**
+   * Simple data fetch using known variant. No discovery, no fallback.
+   * If it fails, caller should retry with backoff.
+   */
+  async getPlantData(
+    plantId: string,
+    variant: string,
+  ): Promise<PlantData | null> {
+    if (!this.token) throw new Error('Not logged in');
+
+    const headers = { 'ar.authToken': this.token };
+    const url = `velis/${variant}/${encodeURIComponent(plantId)}`;
+
+    const res = await this.http.get(url, { headers });
+
+    // Handle auth expiry - re-login and retry once
+    if (res.status === 401) {
+      if (this.debug) this.log.log('Token expired, re-logging in...');
+      await this.login();
+      return this.getPlantData(plantId, variant);
+    }
+
+    // Rate limited
+    if (res.status === 429) {
+      this.log.warn('Rate limited by API');
+      return null;
+    }
+
+    // Server error
+    if (res.status >= 500) {
+      if (this.debug) this.log.log(`Server error: ${res.status}`);
+      return null;
+    }
+
+    // Success but empty data
+    if (res.status === 200 && (!res.data || typeof res.data !== 'object')) {
+      return null;
+    }
+
+    if (res.status !== 200) {
+      return null;
+    }
+
+    // Extract fields from response
+    const raw = res.data;
+    return {
+      variant,
+      raw,
+      currentTemp: raw.temp ?? raw.wtrTemp ?? raw.currentTemp,
+      targetTemp: raw.reqTemp ?? raw.procReqTemp ?? raw.targetTemp,
+      power: raw.on ?? raw.power,
+      antiLeg: raw.antiLeg ?? raw.antiLegionella,
+      heatReq: raw.heatReq ?? raw.heatingReq,
+      avShw: raw.avShw ?? raw.availableShowers,
+      mode: raw.mode,
     };
-
-    const candidates: PlantBest[] = [] as any;
-    let saw429 = false;
-    let maxRetryAfter: number | undefined;
-    let saw401 = false;
-    let saw5xx = 0;
-    let sawTimeout = 0;
-    
-    for (const v of variants) {
-      const url = `velis/${v}/${encodeURIComponent(plantId)}`;
-      try {
-        const res = await this.doGet(url, headers);
-        if (res.status === 200 && res.data && Object.keys(res.data as any).length > 0) {
-          const fields = this.extractFields(res.data);
-          const score = scoreCandidate(fields);
-          candidates.push({ kind: v, data: res.data, fields, score });
-        } else if (res.status >= 500) {
-          saw5xx++;
-        }
-      } catch (e: any) {
-        if (e instanceof RateLimitError) {
-          saw429 = true;
-          if (typeof e.retryAfter === 'number') maxRetryAfter = Math.max(maxRetryAfter || 0, e.retryAfter);
-        } else if (e?.message?.includes('timeout')) {
-          sawTimeout++;
-        } else if (e?.message?.includes('Authentication failed') || e?.message?.includes('unauthorized')) {
-          saw401 = true;
-        }
-        if (this.debug) this.log.error(`[GET ${url}] error: ${e?.message || e}`);
-        // continue with next variant
-      }
-    }
-    
-    if (!candidates.length) {
-      if (saw429) throw new RateLimitError('Rate limited', maxRetryAfter);
-      if (saw401) throw new Error('Authentication failed. Please check your credentials.');
-      // If we saw server errors or timeouts, indicate this is likely transient
-      if (saw5xx > 0 || sawTimeout > 0) {
-        throw new Error(`API server issues (${saw5xx} server errors, ${sawTimeout} timeouts). Ariston servers may be temporarily unavailable.`);
-      }
-      throw new Error('No plant data. All variant endpoints returned empty or invalid data.');
-    }
-    
-    candidates.sort((a, b) => b.score - a.score || variants.indexOf(a.kind) - variants.indexOf(b.kind));
-    const best = candidates[0];
-    this.storage.setVariant(plantId, best.kind);
-    return best;
   }
 
-  async setTemperature(variantKind: string, plantId: string, oldTemp: number, newTemp: number, eco = false) {
-    const headers = { 'ar.authToken': this.ensureToken() };
-    const url = `velis/${variantKind}/${encodeURIComponent(plantId)}/temperature`;
-    const body = { eco: !!eco, old: oldTemp, new: newTemp };
-    const res = await this.doPost(url, body, headers);
-    if (res.status !== 200) throw new Error(`Set temperature failed (${res.status})`);
+  async setTemperature(
+    plantId: string,
+    variant: string,
+    oldTemp: number,
+    newTemp: number,
+  ): Promise<boolean> {
+    if (!this.token) throw new Error('Not logged in');
+
+    const headers = { 'ar.authToken': this.token };
+    const url = `velis/${variant}/${encodeURIComponent(plantId)}/temperature`;
+    const body = { eco: false, old: oldTemp, new: newTemp };
+
+    const res = await this.http.post(url, body, { headers });
+
+    if (res.status === 401) {
+      await this.login();
+      return this.setTemperature(plantId, variant, oldTemp, newTemp);
+    }
+
+    return res.status === 200;
   }
 
-  async setPower(variantKind: string, plantId: string, on: boolean) {
-    const headers = { 'ar.authToken': this.ensureToken() };
-    const url = `velis/${variantKind}/${encodeURIComponent(plantId)}/switch`;
-    const res = await this.doPost(url, !!on, headers);
-    if (res.status !== 200) throw new Error(`Set power failed (${res.status})`);
+  async setPower(
+    plantId: string,
+    variant: string,
+    on: boolean,
+  ): Promise<boolean> {
+    if (!this.token) throw new Error('Not logged in');
+
+    const headers = { 'ar.authToken': this.token };
+    const url = `velis/${variant}/${encodeURIComponent(plantId)}/switch`;
+
+    const res = await this.http.post(url, on, { headers });
+
+    if (res.status === 401) {
+      await this.login();
+      return this.setPower(plantId, variant, on);
+    }
+
+    return res.status === 200;
+  }
+
+  clearVariantCache(plantId: string): void {
+    this.storage.clearVariant(plantId);
   }
 }
