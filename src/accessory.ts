@@ -20,7 +20,8 @@ export class AristonHeaterAccessory {
   private maxTemp: number;
   private debug: boolean;
   private consecutiveFailures = 0;
-  private maxFailuresBeforeRediscovery = 5;
+  // Prevent overlapping refresh calls
+  private refreshInFlight: Promise<void> | null = null;
 
   // Cached state
   private cached = {
@@ -52,7 +53,8 @@ export class AristonHeaterAccessory {
     this.client = new AristonClient({
       username: config.username,
       password: config.password,
-      log: console,
+      // use injected Homebridge logger so logs are consistent
+      log: this.log as any,
       debug: this.debug,
       cacheDir,
     });
@@ -120,6 +122,10 @@ export class AristonHeaterAccessory {
     try {
       this.log.info('Initializing Ariston connection...');
 
+      // Initialize client resources (load persistent variant cache, etc.)
+      // Ensure client.init() is awaited here so storage is ready before discovery.
+      await this.client.init();
+
       // Step 1: Login
       await this.client.login();
       this.log.info('Login successful');
@@ -143,6 +149,8 @@ export class AristonHeaterAccessory {
       // Step 5: Start polling
       this.deviceReady = true;
       this.timer = setInterval(() => this.refresh(), this.pollInterval * 1000);
+      // allow node to exit if this is the only timer left
+      (this.timer as any).unref?.();
 
       this.log.info('Device ready');
     } catch (e: any) {
@@ -155,35 +163,39 @@ export class AristonHeaterAccessory {
   private async refresh(): Promise<void> {
     if (!this.plantId || !this.variant) return;
 
-    try {
-      const data = await this.client.getPlantData(this.plantId, this.variant);
+    // Prevent overlapping refreshes
+    if (this.refreshInFlight) return this.refreshInFlight;
 
-      if (data) {
-        this.updateFromData(data);
-        this.consecutiveFailures = 0;
-      } else {
-        this.consecutiveFailures++;
-        this.log.warn(
-          `Failed to get data (attempt ${this.consecutiveFailures}/${this.maxFailuresBeforeRediscovery})`,
+    this.refreshInFlight = (async () => {
+      try {
+        const data = await this.client.getPlantData(
+          this.plantId!,
+          this.variant!,
         );
 
-        // After too many failures, try rediscovering variant
-        if (this.consecutiveFailures >= this.maxFailuresBeforeRediscovery) {
-          this.log.warn('Too many failures, rediscovering variant...');
-          this.client.clearVariantCache(this.plantId);
-          this.variant = await this.client.discoverVariant(this.plantId);
+        if (data) {
+          this.updateFromData(data);
           this.consecutiveFailures = 0;
+        } else {
+          this.consecutiveFailures++;
+          this.log.warn(
+            `Failed to get data (attempt ${this.consecutiveFailures})`,
+          );
         }
-      }
-    } catch (e: any) {
-      this.consecutiveFailures++;
-      this.log.warn(`Refresh error: ${e.message}`);
+      } catch (e: any) {
+        this.consecutiveFailures++;
+        this.log.warn(`Refresh error: ${e?.message || e}`);
 
-      // Backoff: wait longer after failures
-      const backoffSeconds = Math.min(300, 30 * this.consecutiveFailures);
-      this.log.info(`Backing off for ${backoffSeconds}s`);
-      await new Promise((r) => setTimeout(r, backoffSeconds * 1000));
-    }
+        // Backoff: wait longer after failures
+        const backoffSeconds = Math.min(300, 30 * this.consecutiveFailures);
+        this.log.info(`Backing off for ${backoffSeconds}s`);
+        await new Promise((r) => setTimeout(r, backoffSeconds * 1000));
+      } finally {
+        this.refreshInFlight = null;
+      }
+    })();
+
+    return this.refreshInFlight;
   }
 
   private updateFromData(data: PlantData): void {
@@ -245,6 +257,11 @@ export class AristonHeaterAccessory {
 
     this.log.info(`Setting temperature: ${oldTemp}°C → ${newTemp}°C`);
 
+    // Optimistic update: reflect change in HomeKit immediately for better UX
+    this.cached.targetTemp = newTemp;
+    const C = this.api.hap.Characteristic;
+    this.service.updateCharacteristic(C.TargetTemperature, newTemp);
+
     const success = await this.client.setTemperature(
       this.plantId,
       this.variant,
@@ -253,10 +270,15 @@ export class AristonHeaterAccessory {
     );
 
     if (success) {
-      this.cached.targetTemp = newTemp;
-      // Refresh after a short delay to confirm
+      // Refresh after a short delay to confirm actual state
       setTimeout(() => this.refresh(), 5000);
     } else {
+      // rollback optimistic update
+      this.cached.targetTemp = oldTemp;
+      this.service.updateCharacteristic(
+        C.TargetTemperature,
+        oldTemp ?? this.minTemp,
+      );
       throw new Error('Failed to set temperature');
     }
   }
@@ -271,13 +293,38 @@ export class AristonHeaterAccessory {
 
     this.log.info(`Setting power: ${on ? 'ON' : 'OFF'}`);
 
+    // Optimistic update
+    const prev = this.cached.power;
+    this.cached.power = on;
+    this.service.updateCharacteristic(
+      C.TargetHeatingCoolingState,
+      on ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF,
+    );
+    this.service.updateCharacteristic(
+      C.CurrentHeatingCoolingState,
+      on ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF,
+    );
+
     const success = await this.client.setPower(this.plantId, this.variant, on);
 
     if (success) {
-      this.cached.power = on;
-      // Refresh after a short delay to confirm
+      // confirm by refreshing shortly after
       setTimeout(() => this.refresh(), 5000);
     } else {
+      // rollback
+      this.cached.power = prev;
+      this.service.updateCharacteristic(
+        C.TargetHeatingCoolingState,
+        prev
+          ? C.TargetHeatingCoolingState.HEAT
+          : C.TargetHeatingCoolingState.OFF,
+      );
+      this.service.updateCharacteristic(
+        C.CurrentHeatingCoolingState,
+        prev
+          ? C.CurrentHeatingCoolingState.HEAT
+          : C.CurrentHeatingCoolingState.OFF,
+      );
       throw new Error('Failed to set power');
     }
   }

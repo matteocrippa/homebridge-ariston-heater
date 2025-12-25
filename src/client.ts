@@ -1,15 +1,37 @@
 import axios, { AxiosInstance } from 'axios';
 import { VariantStorage } from './storage';
 
+export interface SmallLogger {
+  info?: (...args: any[]) => void;
+  warn?: (...args: any[]) => void;
+  error?: (...args: any[]) => void;
+  debug?: (...args: any[]) => void;
+}
+
 export interface AristonClientOpts {
   baseURL?: string;
   userAgent?: string;
   username?: string;
   password?: string;
-  log?: Console;
+  log?: SmallLogger;
   debug?: boolean;
   cacheDir?: string;
 }
+
+const API_BASE = 'https://www.ariston-net.remotethermo.com/api/v2/';
+
+// Tuning constants (easy to change in one place)
+const DEFAULT_TIMEOUT_MS = 30000;
+// TTL for the in-memory fallback when network fails (KISS)
+const DEFAULT_FALLBACK_TTL_MS = 2 * 60 * 1000; // 2 minutes
+
+const VARIANTS = [
+  'sePlantData',
+  'medPlantData',
+  'slpPlantData',
+  'onePlantData',
+  'evoPlantData',
+];
 
 export interface PlantData {
   variant: string;
@@ -27,23 +49,35 @@ export class AristonClient {
   private http: AxiosInstance;
   private token: string | null = null;
   private storage: VariantStorage;
-  private log: Console;
+  private log: Required<SmallLogger>;
   private debug: boolean;
   private username?: string;
   private password?: string;
+  // In-memory fallback cache keyed by `${plantId}::${variant}`
+  private memoryCache: Map<string, { data: PlantData; ts: number }> = new Map();
+  // Promise used to serialize concurrent logins
+  private loginPromise: Promise<void> | null = null;
+  // Promise used to ensure storage initialization occurs once
+  private initPromise: Promise<void> | null = null;
 
   constructor(opts: AristonClientOpts = {}) {
-    const baseURL =
-      opts.baseURL || 'https://www.ariston-net.remotethermo.com/api/v2/';
+    const baseURL = opts.baseURL || API_BASE;
     const userAgent =
       opts.userAgent ||
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0';
 
     this.username = opts.username || process.env.ARISTON_USER;
     this.password = opts.password || process.env.ARISTON_PASS;
-    this.log = opts.log || console;
-    this.debug = opts.debug || false;
-    this.storage = new VariantStorage(opts.cacheDir, this.log);
+    // Use injected logger; fallback to a noop logger to avoid accidental console usage
+    const noopLogger: Required<SmallLogger> = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    };
+    this.log = (opts.log as any) || noopLogger;
+    this.debug = !!opts.debug;
+    this.storage = new VariantStorage(opts.cacheDir, this.log as any);
 
     if (!this.username || !this.password) {
       throw new Error('Ariston credentials required');
@@ -51,10 +85,46 @@ export class AristonClient {
 
     this.http = axios.create({
       baseURL,
-      timeout: 30000,
+      timeout: DEFAULT_TIMEOUT_MS,
       headers: { 'User-Agent': userAgent, 'Content-Type': 'application/json' },
       validateStatus: () => true, // Handle all status codes manually
     });
+
+    // Attach token automatically when present
+    this.http.interceptors.request.use((config) => {
+      if (this.token) {
+        config.headers = config.headers || {};
+        (config.headers as any)['ar.authToken'] = this.token;
+      }
+      return config;
+    });
+
+    // Retry once on 401 (avoid retrying login itself)
+    this.http.interceptors.response.use(
+      (res) => res,
+      async (error) => {
+        const { config, response } = error;
+        try {
+          if (
+            response &&
+            response.status === 401 &&
+            config &&
+            !config._retry &&
+            !(config.url && config.url.toString().includes('accounts/login'))
+          ) {
+            // mark to avoid infinite loops
+            config._retry = true;
+            await this.login();
+            config.headers = config.headers || {};
+            (config.headers as any)['ar.authToken'] = this.token;
+            return this.http.request(config);
+          }
+        } catch (e) {
+          // if login fails, fall through to rejection below
+        }
+        return Promise.reject(error);
+      },
+    );
   }
 
   private delay(ms: number): Promise<void> {
@@ -62,35 +132,60 @@ export class AristonClient {
   }
 
   async login(): Promise<void> {
-    const res = await this.http.post('accounts/login', {
-      usr: this.username,
-      pwd: this.password,
-      imp: false,
-      notTrack: true,
-      appInfo: {
-        os: 2,
-        appVer: '5.6.7772.40151',
-        appId: 'com.remotethermo.aristonnet',
-      },
-    });
+    // Serialize concurrent login attempts
+    if (this.loginPromise) return this.loginPromise;
 
-    if (res.status !== 200 || !res.data?.token) {
-      throw new Error(`Login failed (${res.status})`);
+    this.loginPromise = (async () => {
+      const res = await this.http.post('accounts/login', {
+        usr: this.username,
+        pwd: this.password,
+        imp: false,
+        notTrack: true,
+        appInfo: {
+          os: 2,
+          appVer: '6.0.10.40276',
+          appId: 'com.remotethermo.aristonnet',
+        },
+      });
+
+      if (res.status !== 200 || !res.data?.token) {
+        this.token = null;
+        this.loginPromise = null;
+        throw new Error(`Login failed (${res.status})`);
+      }
+
+      this.token = res.data.token;
+      if (this.debug) this.log.debug?.('Login successful');
+      this.loginPromise = null;
+    })();
+
+    return this.loginPromise;
+  }
+
+  // Initialize underlying resources (async) — should be called once at startup
+  async init(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async () => {
+      // initialize persistent storage (non-blocking)
+      await this.storage.init();
+    })();
+    try {
+      await this.initPromise;
+    } finally {
+      // always clear initPromise so caller can retry init later if needed
+      this.initPromise = null;
     }
-
-    this.token = res.data.token;
-    if (this.debug) this.log.log('Login successful');
   }
 
   async discoverPlantId(): Promise<string | null> {
-    if (!this.token) throw new Error('Not logged in');
+    // Ensure we're logged in; the interceptor will attach token
+    await this.login();
 
-    const headers = { 'ar.authToken': this.token };
-
-    for (const path of ['velis/medPlants', 'velis/plants']) {
-      const res = await this.http.get(path, { headers });
+    for (const p of ['velis/medPlants', 'velis/plants']) {
+      const res = await this.http.get(p);
       if (
-        res.status === 200 &&
+        res.status >= 200 &&
+        res.status < 300 &&
         Array.isArray(res.data) &&
         res.data.length > 0
       ) {
@@ -107,36 +202,31 @@ export class AristonClient {
    * Called once at startup, result is cached.
    */
   async discoverVariant(plantId: string): Promise<string> {
-    // Check cache first
+    // Check cache first (storage is expected to be initialized at startup via client.init())
     const cached = this.storage.getVariant(plantId)?.variant;
     if (cached) {
-      if (this.debug) this.log.log(`Using cached variant: ${cached}`);
+      if (this.debug) this.log.debug?.(`Using cached variant: ${cached}`);
       return cached;
     }
 
-    if (!this.token) throw new Error('Not logged in');
-
-    const headers = { 'ar.authToken': this.token };
-    const variants = [
-      'sePlantData',
-      'medPlantData',
-      'slpPlantData',
-      'onePlantData',
-      'evoPlantData',
-    ];
-
+    await this.login();
     this.log.info(`Discovering variant for ${plantId}...`);
 
-    for (const variant of variants) {
+    for (const variant of VARIANTS) {
       try {
         const url = `velis/${variant}/${encodeURIComponent(plantId)}`;
-        const res = await this.http.get(url, { headers });
+        const res = await this.http.get(url);
 
         if (this.debug) {
-          this.log.log(`Trying ${variant}: status=${res.status}`);
+          this.log.debug?.(`Trying ${variant}: status=${res.status}`);
         }
 
-        if (res.status === 200 && res.data && typeof res.data === 'object') {
+        if (
+          res.status >= 200 &&
+          res.status < 300 &&
+          res.data &&
+          typeof res.data === 'object'
+        ) {
           const data = res.data;
           // Check if response has any useful data
           if (
@@ -145,7 +235,7 @@ export class AristonClient {
             data.on !== undefined
           ) {
             this.log.info(`Found working variant: ${variant}`);
-            this.storage.setVariant(plantId, variant);
+            await this.storage.setVariant(plantId, variant);
             return variant;
           }
         }
@@ -153,7 +243,8 @@ export class AristonClient {
         // Small delay between discovery attempts to avoid rate limiting
         await this.delay(1000);
       } catch (e: any) {
-        if (this.debug) this.log.log(`Variant ${variant} failed: ${e.message}`);
+        if (this.debug)
+          this.log.debug?.(`Variant ${variant} failed: ${e?.message || e}`);
         await this.delay(1000);
       }
     }
@@ -169,43 +260,49 @@ export class AristonClient {
     plantId: string,
     variant: string,
   ): Promise<PlantData | null> {
-    if (!this.token) throw new Error('Not logged in');
-
-    const headers = { 'ar.authToken': this.token };
+    await this.login();
     const url = `velis/${variant}/${encodeURIComponent(plantId)}`;
 
-    const res = await this.http.get(url, { headers });
+    // Single attempt fetch: keep it KISS — if it fails we'll use cache and try again next poll
+    const res = await this.http.get(url);
 
-    // Handle auth expiry - re-login and retry once
-    if (res.status === 401) {
-      if (this.debug) this.log.log('Token expired, re-logging in...');
-      await this.login();
-      return this.getPlantData(plantId, variant);
+    if (res.status >= 200 && res.status < 300) {
+      if (!res.data || typeof res.data !== 'object') return null;
+      const parsed = this.parsePlantData(res.data, variant);
+      // store short-lived in-memory fallback
+      try {
+        const key = `${plantId}::${variant}`;
+        this.memoryCache.set(key, { data: parsed, ts: Date.now() });
+      } catch {
+        // no-op on memory cache errors; this should not normally fail
+      }
+      return parsed;
     }
 
-    // Rate limited
-    if (res.status === 429) {
-      this.log.warn('Rate limited by API');
+    // Rate limited or server error — return recent in-memory fallback if available
+    if (res.status === 429 || res.status >= 500) {
+      this.log.warn(
+        'API transient error; returning in-memory fallback if available',
+      );
+      const key = `${plantId}::${variant}`;
+      const entry = this.memoryCache.get(key);
+      if (entry && Date.now() - entry.ts <= DEFAULT_FALLBACK_TTL_MS) {
+        return entry.data;
+      }
       return null;
     }
 
-    // Server error
-    if (res.status >= 500) {
-      if (this.debug) this.log.log(`Server error: ${res.status}`);
-      return null;
+    // Other statuses (4xx etc.) — try in-memory fallback then give up
+    const key = `${plantId}::${variant}`;
+    const entry = this.memoryCache.get(key);
+    if (entry && Date.now() - entry.ts <= DEFAULT_FALLBACK_TTL_MS) {
+      return entry.data;
     }
+    return null;
+  }
 
-    // Success but empty data
-    if (res.status === 200 && (!res.data || typeof res.data !== 'object')) {
-      return null;
-    }
-
-    if (res.status !== 200) {
-      return null;
-    }
-
-    // Extract fields from response
-    const raw = res.data;
+  // Extract PlantData fields from raw response
+  private parsePlantData(raw: any, variant: string): PlantData {
     return {
       variant,
       raw,
@@ -225,20 +322,12 @@ export class AristonClient {
     oldTemp: number,
     newTemp: number,
   ): Promise<boolean> {
-    if (!this.token) throw new Error('Not logged in');
-
-    const headers = { 'ar.authToken': this.token };
+    await this.login();
     const url = `velis/${variant}/${encodeURIComponent(plantId)}/temperature`;
     const body = { eco: false, old: oldTemp, new: newTemp };
 
-    const res = await this.http.post(url, body, { headers });
-
-    if (res.status === 401) {
-      await this.login();
-      return this.setTemperature(plantId, variant, oldTemp, newTemp);
-    }
-
-    return res.status === 200;
+    const res = await this.http.post(url, body);
+    return res.status >= 200 && res.status < 300;
   }
 
   async setPower(
@@ -246,22 +335,10 @@ export class AristonClient {
     variant: string,
     on: boolean,
   ): Promise<boolean> {
-    if (!this.token) throw new Error('Not logged in');
-
-    const headers = { 'ar.authToken': this.token };
+    await this.login();
     const url = `velis/${variant}/${encodeURIComponent(plantId)}/switch`;
 
-    const res = await this.http.post(url, on, { headers });
-
-    if (res.status === 401) {
-      await this.login();
-      return this.setPower(plantId, variant, on);
-    }
-
-    return res.status === 200;
-  }
-
-  clearVariantCache(plantId: string): void {
-    this.storage.clearVariant(plantId);
+    const res = await this.http.post(url, on);
+    return res.status >= 200 && res.status < 300;
   }
 }

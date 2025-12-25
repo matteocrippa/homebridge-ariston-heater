@@ -37,7 +37,7 @@
   "scripts": {
     "build": "rimraf ./dist && tsc && npm run postbuild",
     "clean": "rimraf dist",
-    "lint": "eslint src",
+    "lint": "eslint src --fix",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run lint && npm run build",
     "prepare": "npm run build",
@@ -47,7 +47,7 @@
     "release": "npx release-it"
   },
   "dependencies": {
-    "axios": "^1.11.0"
+    "axios": "^1.13.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
