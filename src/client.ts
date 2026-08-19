@@ -228,15 +228,23 @@ export class AristonClient {
           typeof res.data === 'object'
         ) {
           const data = res.data;
-          // Check if response has any useful data
-          if (
-            data.temp !== undefined ||
-            data.reqTemp !== undefined ||
-            data.on !== undefined
-          ) {
-            this.log.info(`Found working variant: ${variant}`);
-            await this.storage.setVariant(plantId, variant);
-            return variant;
+          // Check if response contains meaningful plant data.
+          // Some Ariston endpoints return HTTP 200 with a valid-looking
+          // structure but all state values set to zero/false.
+          const hasMeaningfulData =
+              (typeof data.temp === 'number' && data.temp > 0) ||
+              (typeof data.reqTemp === 'number' && data.reqTemp > 0) ||
+              (typeof data.procReqTemp === 'number' && data.procReqTemp > 0) ||
+              (typeof data.avShw === 'number' && data.avShw > 0);
+
+          if (hasMeaningfulData) {
+              this.log.info(`Found working variant: ${variant}`);
+              await this.storage.setVariant(plantId, variant);
+              return variant;
+          }
+
+          if (this.debug) {
+              this.log.info(`Variant ${variant} returned no meaningful plant data; trying next variant`);
           }
         }
 
